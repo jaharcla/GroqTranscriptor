@@ -25,6 +25,7 @@ if (-not (Test-Path $envPath)) {
     $settings = [ordered]@{
         GROQ_AUDIO_ENABLED = 'true'
         GROQ_AUDIO_MODEL = 'whisper-large-v3-turbo'
+        ASR_GROUNDED_PROMPT = 'false'
         AUDIO_CACHE_DIR = 'audio-cache'
         ACTIVE_COURSE = 'KIN120'
         LECTURE_DATE = ''

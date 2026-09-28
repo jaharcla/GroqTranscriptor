@@ -4,7 +4,7 @@ CourseAI records or imports lecture audio, transcribes it with Groq Whisper, per
 conservative grounded review with GPT-OSS, and stores the reviewed and raw transcript in
 Notion. No Buzz or local Whisper model is required.
 
-The default audio model is `whisper-large-v3` because lecture capture is accuracy-sensitive.
+The default audio model is now `whisper-large-v3-turbo` with **no course prompt at the ASR stage**. On the CHEM120 benchmark, that combination produced the lowest artifact score and fewest ASR flags. Course grounding is still used by the reviewer.
 The reviewer uses `openai/gpt-oss-120b` with strict structured output. Both Groq stages use
 the same `GROQ_API_KEY`; `NOTION_TOKEN` is still required for course context and storage.
 
@@ -125,7 +125,8 @@ that processing.
 
 ## Important settings
 
-`GROQ_AUDIO_MODEL=whisper-large-v3` selects the accuracy-first model.
+`GROQ_AUDIO_MODEL=whisper-large-v3-turbo` is the current benchmark-selected default.
+`ASR_GROUNDED_PROMPT=false` keeps Notion/course text out of Whisper while retaining grounded review.
 `NOTION_REVIEW_CONTEXT=true` enables mapped-course Notion grounding.
 `REVIEW_CONTEXT_RELATIONS=Modules,Syllabus` controls which root-page relations may be followed.
 `REVIEW_CONTEXT_CACHE_MINUTES=30` controls the local Notion snapshot TTL.

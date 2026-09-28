@@ -101,7 +101,11 @@ class Bridge:
                     self.state.set(path, status="processing", stage="preparing_audio")
                 else:
                     self.state.set(path, stage="preparing_audio")
-                prompt = self.grounder.asr_prompt(lecture, context)
+                prompt = (
+                    self.grounder.asr_prompt(lecture, context)
+                    if getattr(self.config, "asr_grounded_prompt", False)
+                    else ""
+                )
                 self.state.set(path, stage="transcribing")
                 result = self.transcriber.transcribe_result(path, prompt)
                 text = result["text"]

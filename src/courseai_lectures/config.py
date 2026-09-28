@@ -24,7 +24,8 @@ class Config:
     retry_seconds: float = 30
     archive_audio: bool = False
     audio_enabled: bool = False
-    groq_audio_model: str = "whisper-large-v3"
+    groq_audio_model: str = "whisper-large-v3-turbo"
+    asr_grounded_prompt: bool = False
     audio_cache: Path = Path("audio-cache")
     active_course: str = ""
     lecture_date: str = ""
@@ -71,7 +72,8 @@ def load_config(env_file: Path) -> Config:
         active_course = sorted(courses)[0]
     config = Config(
         audio_enabled=get("GROQ_AUDIO_ENABLED", "false").lower() == "true",
-        groq_audio_model=get("GROQ_AUDIO_MODEL", "whisper-large-v3"),
+        groq_audio_model=get("GROQ_AUDIO_MODEL", "whisper-large-v3-turbo"),
+        asr_grounded_prompt=get("ASR_GROUNDED_PROMPT", "false").lower() == "true",
         audio_cache=path("AUDIO_CACHE_DIR", "audio-cache"),
         active_course=active_course,
         lecture_date=get("LECTURE_DATE"),
