@@ -37,7 +37,10 @@ class Config:
     notion_context_enabled: bool = True
     notion_context_cache_minutes: float = 30
     notion_context_max_chars: int = 18000
-    notion_context_relations: tuple[str, ...] = ("Modules", "Syllabus")
+    notion_context_relations: tuple[str, ...] = ("Modules", "Syllabus", "Lecture materials", "Materials")
+    retranscribe_low_confidence: bool = True
+    retranscribe_max_segments: int = 6
+    retranscribe_padding_seconds: float = 2.0
 
 
 def load_config(env_file: Path) -> Config:
@@ -83,8 +86,18 @@ def load_config(env_file: Path) -> Config:
         notion_context_max_chars=int(get("REVIEW_CONTEXT_MAX_CHARS", "18000")),
         notion_context_relations=tuple(
             item.strip()
-            for item in get("REVIEW_CONTEXT_RELATIONS", "Modules,Syllabus").split(",")
+            for item in get(
+                "REVIEW_CONTEXT_RELATIONS",
+                "Modules,Syllabus,Lecture materials,Materials",
+            ).split(",")
             if item.strip()
+        ),
+        retranscribe_low_confidence=get(
+            "RETRANSCRIBE_LOW_CONFIDENCE", "true"
+        ).lower() == "true",
+        retranscribe_max_segments=max(0, int(get("RETRANSCRIBE_MAX_SEGMENTS", "6"))),
+        retranscribe_padding_seconds=max(
+            0.0, float(get("RETRANSCRIBE_PADDING_SECONDS", "2"))
         ),
         token=get("NOTION_TOKEN"),
         database_id=get("NOTION_DATABASE_ID"),
@@ -105,6 +118,11 @@ def load_config(env_file: Path) -> Config:
                 "processing": "Processing",
                 "local_path": "Local transcript path",
                 "ingest_id": "Ingest ID",
+                "needs_review": "Needs review",
+                "review_flags": "Review flags",
+                "review_flag_count": "Review flag count",
+                "grounding_sources": "Grounding sources",
+                "asr_model": "ASR model",
             }.items()
         },
         stable_seconds=float(get("STABLE_SECONDS", "5")),
