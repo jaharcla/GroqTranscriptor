@@ -26,7 +26,9 @@ testpaths = ["tests"]
 line-length = 100
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "UP", "B"]\n# Long Tkinter constructor lines are intentionally excluded; correctness lint remains strict.\nignore = ["E501"]
+select = ["E", "F", "I", "UP", "B"]
+# Long Tkinter constructor lines are intentionally excluded; correctness lint remains strict.
+ignore = ["E501"]
 
 [tool.setuptools.package-data]
 courseai_lectures = ["*.md"]
