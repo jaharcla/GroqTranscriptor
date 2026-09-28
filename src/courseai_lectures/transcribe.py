@@ -44,13 +44,16 @@ def atomic_json(path, value):
 
 def _response(value):
     if isinstance(value, str):
-        return {"text": value, "segments": []}
+        return {"text": value, "segments": [], "words": []}
     if not isinstance(value, dict) or not isinstance(value.get("text"), str):
         raise ValueError("Groq audio response has no valid transcript")
     segments = value.get("segments", [])
+    words = value.get("words", [])
     if not isinstance(segments, list):
         segments = []
-    return {"text": value["text"], "segments": segments}
+    if not isinstance(words, list):
+        words = []
+    return {"text": value["text"], "segments": segments, "words": words}
 
 
 def _quality_flags(segments):
@@ -115,6 +118,21 @@ def _write_chunks(prepared, directory):
         return chunks
 
 
+def _write_clip(prepared, target, start_seconds, end_seconds):
+    """Extract a short PCM clip without invoking another decoder process."""
+    with wave.open(str(prepared), "rb") as source:
+        total = source.getnframes()
+        start = max(0, min(total, int(start_seconds * SAMPLE_RATE)))
+        end = max(start + 1, min(total, int(end_seconds * SAMPLE_RATE)))
+        source.setpos(start)
+        data = source.readframes(end - start)
+    with wave.open(str(target), "wb") as output:
+        output.setnchannels(1)
+        output.setsampwidth(2)
+        output.setframerate(SAMPLE_RATE)
+        output.writeframes(data)
+
+
 class Transcriber:
     def __init__(self, config):
         self.config = config
@@ -149,15 +167,16 @@ class Transcriber:
     def request(self, path, prompt=""):
         if path.stat().st_size >= 25_000_000:
             raise ValueError("Prepared audio chunk exceeds the upload limit")
-        data = {
-            "model": self.config.groq_audio_model,
-            "language": "en",
-            "response_format": "verbose_json",
-            "temperature": "0",
-            "timestamp_granularities[]": "segment",
-        }
+        data = [
+            ("model", self.config.groq_audio_model),
+            ("language", "en"),
+            ("response_format", "verbose_json"),
+            ("temperature", "0"),
+            ("timestamp_granularities[]", "segment"),
+            ("timestamp_granularities[]", "word"),
+        ]
         if prompt.strip():
-            data["prompt"] = prompt.strip()[:900]
+            data.append(("prompt", prompt.strip()[:900]))
         try:
             with path.open("rb") as audio, httpx.Client(timeout=180) as client:
                 response = client.post(
@@ -176,6 +195,58 @@ class Transcriber:
             raise ValueError("Groq audio response is not valid JSON") from None
         return _response(body)
 
+    def _repair_candidates(self, prepared, cache, quality_flags, prompt, temp):
+        """Attach a second ASR hypothesis for low-confidence regions.
+
+        The primary transcript is never overwritten here. These short-clip candidates
+        are evidence for the grounded reviewer and remain auditable in transcript.json.
+        """
+        if not quality_flags or not getattr(
+            self.config, "retranscribe_low_confidence", True
+        ):
+            return quality_flags
+
+        limit = max(0, int(getattr(self.config, "retranscribe_max_segments", 6)))
+        padding = max(
+            0.0, float(getattr(self.config, "retranscribe_padding_seconds", 2.0))
+        )
+        repaired = []
+        for index, flag in enumerate(quality_flags):
+            item = dict(flag)
+            if index >= limit:
+                repaired.append(item)
+                continue
+            start = max(0.0, float(flag.get("start", 0)) - padding)
+            end = max(start + 0.25, float(flag.get("end", start)) + padding)
+            candidate_cache = cache / (
+                f"repair-{index:03d}-{int(start * 1000)}-{int(end * 1000)}.json"
+            )
+            if candidate_cache.exists():
+                candidate = _response(
+                    json.loads(candidate_cache.read_text(encoding="utf-8"))
+                )
+            else:
+                clip = temp / f"repair-{index:03d}.wav"
+                _write_clip(prepared, clip, start, end)
+                repair_prompt = (
+                    prompt
+                    + " Short uncertain lecture excerpt. Preserve the exact spoken wording "
+                    "and use course terminology only when the audio supports it."
+                )[:900]
+                candidate = _response(self.request(clip, repair_prompt))
+                atomic_json(candidate_cache, candidate)
+            candidate_text = candidate["text"].strip()
+            if candidate_text:
+                item["retranscription"] = {
+                    "start": round(start, 2),
+                    "end": round(end, 2),
+                    "text": candidate_text,
+                    "segments": candidate.get("segments", []),
+                    "words": candidate.get("words", []),
+                }
+            repaired.append(item)
+        return repaired
+
     def transcribe_result(self, path, prompt=""):
         if not self.config.groq_api_key:
             raise ValueError("Set GROQ_API_KEY in .env")
@@ -193,9 +264,11 @@ class Transcriber:
             digest.update(
                 (
                     self.config.groq_audio_model
-                    + "|en|480|overlap5|verbose-segments|"
+                    + "|en|480|overlap5|verbose-segments-words|"
                     + prompt
-                    + "|v2"
+                    + f"|repair={getattr(self.config, 'retranscribe_low_confidence', True)}"
+                    + f"|repair-max={getattr(self.config, 'retranscribe_max_segments', 6)}"
+                    + "|v3"
                 ).encode()
             )
             cache = self.config.audio_cache / digest.hexdigest()
@@ -237,6 +310,7 @@ class Transcriber:
 
             texts = []
             segments = []
+            words = []
             previous_text = ""
             for index, (chunk, offset) in enumerate(chunks):
                 item = cache / f"chunk-{index:05d}.json"
@@ -261,8 +335,23 @@ class Transcriber:
                     shifted["start"] = round(float(segment.get("start", 0)) + offset, 3)
                     shifted["end"] = round(float(segment.get("end", 0)) + offset, 3)
                     kept.append(shifted)
+                kept_words = []
+                for word in result.get("words", []):
+                    local_start = float(word.get("start", 0))
+                    if index and local_start < OVERLAP_SECONDS:
+                        continue
+                    shifted_word = dict(word)
+                    shifted_word["start"] = round(local_start + offset, 3)
+                    shifted_word["end"] = round(
+                        float(word.get("end", local_start)) + offset, 3
+                    )
+                    kept_words.append(shifted_word)
+                words.extend(kept_words)
+
                 if kept:
-                    chunk_text = "".join(str(segment.get("text", "")) for segment in kept).strip()
+                    chunk_text = "".join(
+                        str(segment.get("text", "")) for segment in kept
+                    ).strip()
                     segments.extend(kept)
                 else:
                     chunk_text = result["text"].strip()
@@ -273,14 +362,24 @@ class Transcriber:
             text = "\n\n".join(texts)
             if not text.strip():
                 raise ValueError("No speech transcribed; check microphone and recording")
+            quality_flags = _quality_flags(segments)
+            quality_flags = self._repair_candidates(
+                prepared,
+                cache,
+                quality_flags,
+                prompt,
+                temp,
+            )
             result = {
+                "schema_version": 3,
                 "text": text,
                 "model": self.config.groq_audio_model,
                 "source_name": path.name,
                 "chunks": len(chunks),
                 "overlap_seconds": OVERLAP_SECONDS,
                 "segments": segments,
-                "quality_flags": _quality_flags(segments),
+                "words": words,
+                "quality_flags": quality_flags,
             }
             atomic_json(final, result)
             cache.mkdir(parents=True, exist_ok=True)
