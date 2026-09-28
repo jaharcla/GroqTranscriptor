@@ -301,10 +301,7 @@ def _sample_set(source, output, full, sample_seconds):
 
 
 def _merge_records(records):
-    text = "\n\n".join(
-        f"[{item['label']} @ {item['start']:.1f}s]\n{item['result']['text'].strip()}"
-        for item in records
-    )
+    text = "\n\n".join(item["result"]["text"].strip() for item in records)
     flags = []
     for item in records:
         for flag in item["result"].get("quality_flags", []):
@@ -372,7 +369,28 @@ def _run_faster_whisper(model_name, mode, samples, prompt):
     cuda = ctranslate2.get_cuda_device_count() > 0
     device = "cuda" if cuda else "cpu"
     compute_type = "float16" if cuda else "int8"
-    model = WhisperModel(model_name, device=device, compute_type=compute_type)
+    try:
+        model = WhisperModel(model_name, device=device, compute_type=compute_type)
+    except Exception as exc:
+        if not cuda:
+            return {
+                "backend": "faster-whisper",
+                "model": model_name,
+                "prompt_mode": mode,
+                "skipped": True,
+                "reason": f"Local model could not start: {exc}",
+            }
+        device, compute_type = "cpu", "int8"
+        try:
+            model = WhisperModel(model_name, device=device, compute_type=compute_type)
+        except Exception as cpu_exc:
+            return {
+                "backend": "faster-whisper",
+                "model": model_name,
+                "prompt_mode": mode,
+                "skipped": True,
+                "reason": f"CUDA and CPU local model startup failed: {cpu_exc}",
+            }
     selected_prompt = prompt if mode == "grounded" else None
     records = []
     for sample in samples:
