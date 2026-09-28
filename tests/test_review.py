@@ -25,7 +25,7 @@ def correction(original, replacement="fixed", reason="test"):
 def test_corrections_preserve_other_characters():
     result = {
         "corrections": [
-            {"original": "new tons", "replacement": "newtons", "reason": "force unit"}
+            {"original": "new tons", "replacement": "newtons", "reason": "force unit", "evidence": ["transcript"]}
         ],
         "flags": ["Check magnitude"],
     }
