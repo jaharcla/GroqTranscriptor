@@ -32,7 +32,12 @@ class Config:
     groq_api_key: str = ""
     groq_model: str = "openai/gpt-oss-120b"
     review_dir: Path = Path("reviews")
-    context_dir: Path = Path("review-context")\n    materials_dir: Path = Path("lecture-materials")\n    notion_context_enabled: bool = True\n    notion_context_cache_minutes: float = 30\n    notion_context_max_chars: int = 18000\n    notion_context_relations: tuple[str, ...] = ("Modules", "Syllabus")
+    context_dir: Path = Path("review-context")
+    materials_dir: Path = Path("lecture-materials")
+    notion_context_enabled: bool = True
+    notion_context_cache_minutes: float = 30
+    notion_context_max_chars: int = 18000
+    notion_context_relations: tuple[str, ...] = ("Modules", "Syllabus")
 
 
 def load_config(env_file: Path) -> Config:
@@ -71,7 +76,16 @@ def load_config(env_file: Path) -> Config:
         groq_api_key=get("GROQ_API_KEY"),
         groq_model=get("GROQ_MODEL", "openai/gpt-oss-120b"),
         review_dir=path("REVIEW_DIR", "reviews"),
-        context_dir=path("REVIEW_CONTEXT_DIR", "review-context"),\n        materials_dir=path("LECTURE_MATERIAL_DIR", f"{root}/Materials"),\n        notion_context_enabled=get("NOTION_REVIEW_CONTEXT", "true").lower() == "true",\n        notion_context_cache_minutes=float(get("REVIEW_CONTEXT_CACHE_MINUTES", "30")),\n        notion_context_max_chars=int(get("REVIEW_CONTEXT_MAX_CHARS", "18000")),\n        notion_context_relations=tuple(\n            item.strip()\n            for item in get("REVIEW_CONTEXT_RELATIONS", "Modules,Syllabus").split(",")\n            if item.strip()\n        ),
+        context_dir=path("REVIEW_CONTEXT_DIR", "review-context"),
+        materials_dir=path("LECTURE_MATERIAL_DIR", f"{root}/Materials"),
+        notion_context_enabled=get("NOTION_REVIEW_CONTEXT", "true").lower() == "true",
+        notion_context_cache_minutes=float(get("REVIEW_CONTEXT_CACHE_MINUTES", "30")),
+        notion_context_max_chars=int(get("REVIEW_CONTEXT_MAX_CHARS", "18000")),
+        notion_context_relations=tuple(
+            item.strip()
+            for item in get("REVIEW_CONTEXT_RELATIONS", "Modules,Syllabus").split(",")
+            if item.strip()
+        ),
         token=get("NOTION_TOKEN"),
         database_id=get("NOTION_DATABASE_ID"),
         data_source_id=get("NOTION_DATA_SOURCE_ID"),
