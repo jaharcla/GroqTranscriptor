@@ -401,9 +401,9 @@ class ListenerApp(tk.Tk):
             state.set(
                 destination,
                 routing=json.dumps(route),
-                status="pending",
+                status="staging",
                 stage="detected",
-                next_retry=0,
+                next_retry=time.time() + 30,
                 error=None,
             )
             state.set_setting("active_course", route["course"])
@@ -411,6 +411,19 @@ class ListenerApp(tk.Tk):
         finally:
             state.close()
         return route
+
+    def _queue_pinned(self, destination: Path):
+        state = State(self.config.state)
+        try:
+            state.set(
+                destination,
+                status="pending",
+                stage="detected",
+                next_retry=0,
+                error=None,
+            )
+        finally:
+            state.close()
 
     def _fill_drop_card(self, parent):
         inner = tk.Frame(parent, bg=CARD_BG, padx=18, pady=18)
@@ -791,6 +804,7 @@ class ListenerApp(tk.Tk):
         try:
             route = self._pin_route(destination, path)
             path.replace(destination)
+            self._queue_pinned(destination)
         except (OSError, ValueError) as exc:
             messagebox.showerror("Recording error", sanitize_error(exc))
             return
@@ -879,6 +893,7 @@ class ListenerApp(tk.Tk):
         try:
             if any(path.is_relative_to(root) for root in watched_roots):
                 route = self._pin_route(path, path, overwrite=True)
+                self._queue_pinned(path)
                 self.record_status.config(
                     text=f"Queued {route['course']}: {path.name}",
                     fg=SUCCESS,
@@ -900,6 +915,7 @@ class ListenerApp(tk.Tk):
                 try:
                     route = self._pin_route(destination, path)
                     os.replace(temporary, destination)
+                    self._queue_pinned(destination)
                 except Exception:
                     temporary.unlink(missing_ok=True)
                     raise
