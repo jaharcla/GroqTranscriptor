@@ -101,3 +101,56 @@ def test_watcher_accepts_audio_when_enabled(tmp_path):
     path = tmp_path / "random.M4A"
     pending.add(path)
     assert path.resolve() in pending.take()
+
+
+def test_verbose_segments_are_shifted_and_low_confidence_is_flagged(config):
+    config_audio(config)
+    source = config.audio / "random.wav"
+    wav(source, 481)
+    transcriber = Transcriber(config)
+    transcriber.request = Mock(
+        side_effect=[
+            {
+                "text": "First chunk",
+                "segments": [
+                    {
+                        "start": 470.0,
+                        "end": 476.0,
+                        "text": " first boundary",
+                        "avg_logprob": -0.2,
+                        "no_speech_prob": 0.01,
+                        "compression_ratio": 1.2,
+                    }
+                ],
+            },
+            {
+                "text": "Duplicate boundary then second",
+                "segments": [
+                    {
+                        "start": 1.0,
+                        "end": 4.0,
+                        "text": " duplicate boundary",
+                        "avg_logprob": -0.2,
+                        "no_speech_prob": 0.01,
+                        "compression_ratio": 1.2,
+                    },
+                    {
+                        "start": 5.2,
+                        "end": 5.8,
+                        "text": " second",
+                        "avg_logprob": -0.8,
+                        "no_speech_prob": 0.01,
+                        "compression_ratio": 1.2,
+                    },
+                ],
+            },
+        ]
+    )
+
+    result = transcriber.transcribe_result(source, "course terms")
+
+    assert "duplicate boundary" not in result["text"]
+    assert "second" in result["text"]
+    assert result["segments"][-1]["start"] > 480
+    assert result["quality_flags"]
+    assert "avg_logprob" in result["quality_flags"][0]["reasons"][0]
