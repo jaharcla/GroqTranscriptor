@@ -6,6 +6,7 @@ from pathlib import Path
 
 from filelock import FileLock, Timeout
 
+from .benchmark import benchmark_asr
 from .bridge import Bridge
 from .config import load_config
 from .notion import Notion
@@ -22,6 +23,28 @@ def main(argv=None):
     sub.add_parser("retry")
     sub.add_parser("check", help="Validate Notion schema and course access without writing")
     sub.add_parser("process").add_argument("file", type=Path)
+    benchmark = sub.add_parser(
+        "benchmark-asr",
+        help="Compare Groq Whisper variants and an optional local faster-whisper model",
+    )
+    benchmark.add_argument("file", type=Path)
+    benchmark.add_argument("--course", required=True)
+    benchmark.add_argument(
+        "--models",
+        nargs="+",
+        default=["whisper-large-v3", "whisper-large-v3-turbo"],
+    )
+    benchmark.add_argument(
+        "--prompt-modes",
+        nargs="+",
+        choices=["plain", "grounded"],
+        default=["plain", "grounded"],
+    )
+    benchmark.add_argument("--sample-seconds", type=float, default=75.0)
+    benchmark.add_argument("--full", action="store_true")
+    benchmark.add_argument("--local-model")
+    benchmark.add_argument("--reference", type=Path)
+    benchmark.add_argument("--output", type=Path)
     resolve = sub.add_parser(
         "reconcile", help="Clear an uncertain-write journal after manual inspection"
     )
@@ -49,6 +72,27 @@ def main(argv=None):
                 print(json.dumps(state.jobs(), indent=2))
             finally:
                 state.close()
+            return 0
+        if args.command == "benchmark-asr":
+            output, summary = benchmark_asr(
+                config,
+                args.file,
+                args.course,
+                models=tuple(args.models),
+                prompt_modes=tuple(args.prompt_modes),
+                full=args.full,
+                sample_seconds=args.sample_seconds,
+                local_model=args.local_model,
+                reference=args.reference,
+                output=args.output,
+            )
+            print(f"ASR benchmark written to: {output}")
+            if summary.get("provisional_order"):
+                best = summary["provisional_order"][0]
+                print(
+                    "Provisional best: "
+                    f"{best['name']} ({best['basis']}={best['value']})"
+                )
             return 0
         with FileLock(str(config.state) + ".lock", timeout=0):
             state, notion = State(config.state), Notion(config)
