@@ -14,6 +14,7 @@ def config_audio(config):
     config.audio_enabled = True
     config.groq_api_key = "test-key"
     config.groq_audio_model = "whisper-large-v3-turbo"
+    config.asr_grounded_prompt = False
     config.retranscribe_low_confidence = False
     config.retranscribe_max_segments = 6
     config.retranscribe_padding_seconds = 2.0
@@ -112,6 +113,43 @@ def test_successful_chunk_is_not_reuploaded_after_failure(config):
     transcriber.request = Mock(return_value="Second")
     assert transcriber.transcribe(source) == "First\n\nSecond"
     assert transcriber.request.call_count == 1
+
+
+def test_bridge_keeps_course_context_out_of_asr_by_default(config):
+    config_audio(config)
+    source = config.audio / "random.wav"
+    wav(source)
+    state, notion = State(config.state), Mock()
+    notion.sync.return_value = "page"
+    bridge = Bridge(config, state, notion)
+    bridge.grounder.asr_prompt = Mock(return_value="CHEM120 quantum terminology")
+    bridge.transcriber.request = Mock(return_value="A lecture about vectors.")
+
+    try:
+        assert bridge.process(source)
+        bridge.grounder.asr_prompt.assert_not_called()
+        assert bridge.transcriber.request.call_args.args[1] == ""
+    finally:
+        state.close()
+
+
+def test_bridge_can_enable_grounded_asr_prompt(config):
+    config_audio(config)
+    config.asr_grounded_prompt = True
+    source = config.audio / "random.wav"
+    wav(source)
+    state, notion = State(config.state), Mock()
+    notion.sync.return_value = "page"
+    bridge = Bridge(config, state, notion)
+    bridge.grounder.asr_prompt = Mock(return_value="KIN120 vector terminology")
+    bridge.transcriber.request = Mock(return_value="A lecture about vectors.")
+
+    try:
+        assert bridge.process(source)
+        bridge.grounder.asr_prompt.assert_called_once()
+        assert bridge.transcriber.request.call_args.args[1] == "KIN120 vector terminology"
+    finally:
+        state.close()
 
 
 def test_audio_bridge_imports_once(config):
