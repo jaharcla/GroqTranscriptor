@@ -84,6 +84,36 @@ deterministically. It becomes true whenever unresolved reviewer flags, ASR quali
 mismatch flags, or grounding warnings remain. Optional `Review flags`, `Review flag count`,
 `Grounding sources`, and `ASR model` properties are also populated when those properties exist.
 
+## ASR benchmark
+
+CourseAI can benchmark the exact same lecture against Groq Whisper Large V3 and Turbo,
+with both plain and course-grounded prompts. By default it samples four 75-second windows
+from across the recording so model changes can be compared quickly and cheaply.
+
+Example:
+
+```powershell
+.\.venv\Scripts\courseai-lectures.exe benchmark-asr `
+  "C:\CourseAI\Lectures\Audio Inbox\Record (online-voice-recorder.com) (2).mp3" `
+  --course CHEM120
+```
+
+Results are written under `C:\CourseAI\Lectures\Benchmarks\...` with a Markdown
+summary plus raw TXT/JSON for every model/prompt condition. The provisional artifact score
+looks for loops, repeated phrases, dominant odd tokens, and low-confidence regions. It is not
+a substitute for WER/CER against a corrected reference transcript.
+
+To include a local open-source baseline, install the optional dependency once:
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -e "C:\CourseAI\Bridge[local-asr]"
+```
+
+Then run the benchmark with `--local-model large-v3`. faster-whisper will use CUDA when
+CTranslate2 can see a supported NVIDIA CUDA/cuDNN setup, otherwise it falls back to CPU.
+Use `--full` only after the sampled benchmark is useful; the full run processes the entire
+recording for every selected condition. Use `--reference corrected.txt` to add WER/CER.
+
 ## Privacy and data flow
 
 Original audio remains on the PC, but audio chunks are sent to Groq for transcription. The
