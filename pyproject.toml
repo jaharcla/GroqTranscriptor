@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "courseai-lectures"
 version = "0.3.0"
-description = "Local Buzz transcript ingestion into Notion, with optional Groq transcript review"
+description = "Groq-powered lecture recording transcription, review, and Notion ingestion for CourseAI"
 requires-python = ">=3.11"
 dependencies = ["imageio-ffmpeg>=0.6,<1", "httpx>=0.27,<1", "watchdog>=4,<7", "python-dotenv>=1,<2", "PyYAML>=6,<7", "filelock>=3.13,<4", "sounddevice>=0.5,<1", "numpy>=2,<3"]
 

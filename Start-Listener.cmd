@@ -1,8 +1,9 @@
 @echo off
-cd /d C:\CourseAI\Bridge
+set "BRIDGE_DIR=%~dp0"
+cd /d "%BRIDGE_DIR%"
 if exist .venv\Scripts\courseai-listener.exe (
     start "" "C:\CourseAI\Lectures\Audio Inbox"
-    start "" "C:\CourseAI\Bridge\.venv\Scripts\courseai-listener.exe"
+    start "" "%BRIDGE_DIR%.venv\Scripts\courseai-listener.exe"
     exit /b 0
 )
 

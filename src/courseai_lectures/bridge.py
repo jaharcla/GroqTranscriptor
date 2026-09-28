@@ -9,7 +9,6 @@ from .review import Reviewer
 from .transcribe import AUDIO_TYPES, Transcriber
 
 log = logging.getLogger(__name__)
-AUDIO_EXTENSIONS = {".m4a", ".wav", ".mp3", ".flac", ".ogg", ".aac", ".wma", ".mp4"}
 
 
 class Bridge:
@@ -32,7 +31,7 @@ class Bridge:
                     for p in parent.iterdir()
                     if p.is_file()
                     and p.stem.casefold() == path.stem.casefold()
-                    and p.suffix.lower() in AUDIO_EXTENSIONS
+                    and p.suffix.lower() in AUDIO_TYPES
                 )
         return list(dict.fromkeys(result))
 
@@ -62,12 +61,15 @@ class Bridge:
         self.state.ensure(path)
         try:
             saved_route = self.state.get(path).get("routing")
+            active_course = self.state.get_setting(
+                "active_course", getattr(self.config, "active_course", "")
+            )
             lecture = (
                 Lecture(**json.loads(saved_route))
                 if saved_route
                 else parse_filename(
                     path,
-                    getattr(self.config, "active_course", ""),
+                    active_course,
                     getattr(self.config, "lecture_date", ""),
                 )
             )
@@ -76,6 +78,7 @@ class Bridge:
             if not saved_route:
                 self.state.set(
                     path,
+                    stage="detected",
                     routing=json.dumps(
                         {
                             "course": lecture.course,
@@ -84,6 +87,9 @@ class Bridge:
                         }
                     ),
                 )
+            if is_audio:
+                self.state.set(path, stage="preparing_audio")
+                self.state.set(path, stage="transcribing")
             text = (
                 self.transcriber.transcribe(path)
                 if is_audio
@@ -96,18 +102,20 @@ class Bridge:
             if row["status"] == "done" and row["digest"] == digest and row["key"] == lecture.key:
                 log.info("Already ingested: %s", path)
                 return True
-            self.state.set(path, key=lecture.key, status="processing")
+            self.state.set(path, key=lecture.key, status="processing", stage="reviewing")
             for other in self.state.jobs():
                 if other["key"] == lecture.key and other["pending"] and other["path"] != str(path):
                     self.notion.prepare()
                     self.notion.recover(self.state, other["path"])
             if self.reviewer:
                 text = self.reviewer.review(text, lecture)
+            self.state.set(path, stage="uploading")
             page = self.notion.sync(lecture, text, path, self.state)
             if not is_audio:
                 self.archive_audio(path)
             self.state.set(
-                path, digest=digest, page=page, status="done", attempts=0, next_retry=0, error=None
+                path, digest=digest, page=page, status="done", stage="complete",
+                attempts=0, next_retry=0, error=None
             )
             log.info("Ingested: %s -> Notion %s", path, page)
             return True
@@ -118,5 +126,6 @@ class Bridge:
             if getattr(self.config, "groq_api_key", ""):
                 error = error.replace(self.config.groq_api_key, "[REDACTED]")
             self.state.fail(path, error, self.config.retry_seconds)
+            self.state.set(path, stage="error")
             log.error("Failed: %s: %s", path, error)
             return False

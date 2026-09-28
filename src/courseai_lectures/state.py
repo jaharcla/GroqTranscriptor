@@ -18,6 +18,15 @@ class State:
         columns = {row[1] for row in self.db.execute("PRAGMA table_info(jobs)")}
         if "routing" not in columns:
             self.db.execute("ALTER TABLE jobs ADD COLUMN routing TEXT")
+        if "stage" not in columns:
+            self.db.execute("ALTER TABLE jobs ADD COLUMN stage TEXT NOT NULL DEFAULT 'detected'")
+            self.db.execute("UPDATE jobs SET stage='complete' WHERE status='done'")
+            self.db.execute("UPDATE jobs SET stage='error' WHERE status='failed'")
+        self.db.execute(
+            """CREATE TABLE IF NOT EXISTS settings (
+                key TEXT PRIMARY KEY, value TEXT NOT NULL
+            )"""
+        )
         self.db.commit()
 
     def get(self, path):
@@ -39,6 +48,7 @@ class State:
             "error",
             "pending",
             "routing",
+            "stage",
         }
         if not fields or not fields.keys() <= allowed:
             raise ValueError("Invalid state fields")
@@ -48,6 +58,18 @@ class State:
 
     def journal(self, path, operation):
         self.set(path, pending=json.dumps(operation) if operation else None)
+
+    def get_setting(self, key, default=None):
+        row = self.db.execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone()
+        return row["value"] if row else default
+
+    def set_setting(self, key, value):
+        self.db.execute(
+            "INSERT INTO settings(key, value) VALUES (?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            (key, str(value)),
+        )
+        self.db.commit()
 
     def fail(self, path, error, delay):
         row = self.get(path)

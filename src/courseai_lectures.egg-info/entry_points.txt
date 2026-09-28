@@ -1,2 +1,0 @@
-[console_scripts]
-courseai-lectures = courseai_lectures.cli:main

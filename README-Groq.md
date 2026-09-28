@@ -18,7 +18,8 @@ Both stages use the same GROQ_API_KEY. NOTION_TOKEN is still needed for storage.
 5. Double-click C:\CourseAI\Bridge\Start-Listener.cmd. It checks connections,
    opens Audio Inbox, and starts the watcher. Keep its terminal open.
 6. Save/copy the FINISHED recording into C:\CourseAI\Lectures\Audio Inbox.
-   Random filenames work. Do not record live into the watched folder.
+   Random filenames work. The built-in microphone button records in
+   `Recording Staging` and atomically moves the closed WAV into Audio Inbox.
 
 For today's already-recorded test, just copy that saved audio into Audio Inbox.
 No manual TXT export is needed. A local transcript copy lives beneath
@@ -51,8 +52,9 @@ Use distinct filenames per recording; do not overwrite an old lecture's file.
   reuse paid work. A lost API response can still require repeating a request.
 - Internet and available Groq quota are required. Free access is subject to your
   account's limits; the program does not enable billing or guarantee free use.
-- Save the recording outside Audio Inbox, then copy it in after closing it. A
-  quiet file interval alone cannot prove a paused recording has finished.
+- Never record a live stream directly into Audio Inbox. The listener's built-in
+  recorder stages outside the watched folder and moves only a closed, non-empty
+  WAV into the inbox.
 - Existing Notion duplicate prevention, write journal and retries remain in use.
   Failed transcription/review remains pending; no empty success is fabricated.
 - Original audio is never moved by direct audio ingestion. ARCHIVE_AUDIO applies

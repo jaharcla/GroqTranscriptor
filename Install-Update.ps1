@@ -41,8 +41,8 @@ if (-not (Test-Path $envPath)) {
     }
 }
 New-Item -ItemType Directory -Force 'C:\CourseAI\Lectures\Audio Inbox' | Out-Null
+New-Item -ItemType Directory -Force 'C:\CourseAI\Lectures\Recording Staging' | Out-Null
 Copy-Item "$PSScriptRoot\Start-Listener.cmd" $target -Force
-& "$target\.venv\Scripts\python.exe" -m pip install -e $target
 Write-Host 'Existing Notion credentials and courses.yaml retained. Fill GROQ_API_KEY and ensure GROQ_ENABLED=true.'
 Write-Host 'Then run from C:\CourseAI\Bridge: .\.venv\Scripts\courseai-listener.exe'
 Start-Process notepad.exe -ArgumentList $envPath

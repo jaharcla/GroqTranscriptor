@@ -1,23 +1,23 @@
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import threading
 import time
-import webbrowser
+import tkinter as tk
 import wave
+import webbrowser
 from datetime import datetime
 from pathlib import Path
-
-import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
 from .bridge import Bridge
 from .config import load_config
 from .notion import Notion
 from .state import State
-
+from .transcribe import AUDIO_TYPES
 
 WINDOW_BG = "#101419"
 PANEL_BG = "#151d29"
@@ -31,16 +31,7 @@ ERROR = "#ff6b7a"
 SUCCESS = "#72d897"
 BORDER = "#243041"
 
-AUDIO_EXTENSIONS = (
-    "*.m4a",
-    "*.wav",
-    "*.mp3",
-    "*.flac",
-    "*.ogg",
-    "*.aac",
-    "*.wma",
-    "*.mp4",
-)
+AUDIO_EXTENSIONS = tuple(f"*{extension}" for extension in sorted(AUDIO_TYPES))
 
 
 def resolve_env_path(start: Path | None = None) -> Path:
@@ -87,15 +78,13 @@ def status_label_for(row: dict | None) -> str:
 
 
 def summary_status_for(rows: list[dict], running: bool) -> str:
-    if running:
-        return "LISTENING"
     if any(row.get("status") == "processing" for row in rows):
         return "PROCESSING"
     if any(row.get("status") == "failed" for row in rows):
         return "ERROR"
     if any(row.get("status") != "done" for row in rows):
         return "WAITING"
-    return "PAUSED"
+    return "IDLE" if running else "PAUSED"
 
 
 def tonal_chip(status: str) -> str:
@@ -125,6 +114,9 @@ class ListenerApp(tk.Tk):
         self._active_jobs = []
         self._recent_jobs = []
         self._refresh_cancel = False
+        self._health_running = False
+        self._last_health_error = ""
+        self._page = None
         self._recording_stream = None
         self._recording_file = None
         self._recording_path = None
@@ -148,7 +140,9 @@ class ListenerApp(tk.Tk):
         self._build_layout()
         self._bind_shortcuts()
         self.protocol("WM_DELETE_WINDOW", self.close_app)
+        self.start_listener()
         self.refresh_all()
+        self._start_health_check()
 
     def _build_layout(self):
         self.sidebar = tk.Frame(self, width=220, bg=PANEL_BG)
@@ -285,12 +279,64 @@ class ListenerApp(tk.Tk):
         self._set_listener_button_text()
 
     def _nav_select(self, label: str):
-        pass
+        if self._page is not None:
+            self._page.destroy()
+            self._page = None
+        if label == "Dashboard":
+            self.dashboard.pack(fill="both", expand=True)
+            return
+        self.dashboard.pack_forget()
+        self._page = tk.Frame(self.main, bg=WINDOW_BG)
+        self._page.pack(fill="both", expand=True)
+        tk.Label(self._page, text=label, bg=WINDOW_BG, fg=TEXT,
+                 font=("Segoe UI", 18, "bold")).pack(anchor="w", pady=(10, 16))
+        if label == "Lectures":
+            tree = ttk.Treeview(self._page, columns=("Lecture", "Course", "Date", "Status", "Stage", "Attempts", "Page"),
+                                show="headings")
+            for col in tree["columns"]:
+                tree.heading(col, text=col)
+                tree.column(col, width=140)
+            tree.pack(fill="both", expand=True)
+            for row in self._recent_jobs:
+                routing = parse_routing(row)
+                tree.insert("", "end", values=(
+                    Path(row.get("path", "")).name, routing.get("course", "-"),
+                    routing.get("date", "-"), row.get("status", "pending"),
+                    row.get("stage", "detected"), row.get("attempts", 0), row.get("page") or "-"))
+            tk.Button(self._page, text="Retry failed jobs", command=self.retry_failed_jobs,
+                      bg="#1d2a36", fg=TEXT, relief="flat").pack(anchor="w", pady=10)
+        elif label == "Activity":
+            text = tk.Text(self._page, bg="#121c28", fg=TEXT, relief="flat", wrap="word")
+            text.pack(fill="both", expand=True)
+            if self.config.log.exists():
+                lines = self.config.log.read_text(encoding="utf-8", errors="replace").splitlines()[-200:]
+                text.insert("1.0", "\n".join(sanitize_error(line, self.config.token, self.config.groq_api_key)
+                                             for line in lines))
+            text.configure(state="disabled")
+        else:
+            tk.Label(self._page, text="Active Course", bg=WINDOW_BG, fg=MUTED).pack(anchor="w")
+            combo = ttk.Combobox(self._page, values=sorted(self.config.courses),
+                                 textvariable=self.course_var, state="readonly", width=22)
+            combo.pack(anchor="w", pady=(4, 16))
+            combo.bind("<<ComboboxSelected>>", self._on_active_course_change)
+            tk.Label(self._page, text=f"Audio Inbox: {self.config.audio}\n"
+                     f"Recording staging: {self.config.audio.parent / 'Recording Staging'}\n"
+                     f"Groq API key: {'Configured' if self.config.groq_api_key else 'Not configured'}",
+                     bg=WINDOW_BG, fg=MUTED, justify="left").pack(anchor="w")
+            tk.Button(self._page, text="Check Services", command=self._start_health_check,
+                      bg="#1d2a36", fg=TEXT, relief="flat").pack(anchor="w", pady=16)
 
     def _apply_course_options(self):
         courses = sorted(self.config.courses)
         self.course_combo["values"] = courses
-        active = (self.config.active_course or (courses[0] if courses else "")).upper()
+        state = State(self.config.state)
+        try:
+            saved = state.get_setting("active_course")
+            active = (saved or self.config.active_course or (courses[0] if courses else "")).upper()
+            if active and not saved:
+                state.set_setting("active_course", active)
+        finally:
+            state.close()
         if active in courses:
             self.course_var.set(active)
             self.config.active_course = active
@@ -305,6 +351,11 @@ class ListenerApp(tk.Tk):
         if not selected:
             return
         self.config.active_course = selected.upper()
+        state = State(self.config.state)
+        try:
+            state.set_setting("active_course", self.config.active_course)
+        finally:
+            state.close()
 
     def _fill_drop_card(self, parent):
         inner = tk.Frame(parent, bg=CARD_BG, padx=18, pady=18)
@@ -467,14 +518,38 @@ class ListenerApp(tk.Tk):
             statuses = {"audio": "Unavailable", "review": "Unavailable", "notion": "Unavailable"}
         self.health = statuses
 
+    def _start_health_check(self):
+        if self._health_running:
+            return
+        self._health_running = True
+        self.health = {key: "Checking…" for key in self.health}
+        self._apply_health()
+
+        def worker():
+            try:
+                self._refresh_health()
+            except Exception as exc:
+                self._last_health_error = sanitize_error(exc, self.config.token, self.config.groq_api_key)
+            finally:
+                self._health_running = False
+                self.after(0, self._apply_health)
+
+        threading.Thread(target=worker, daemon=True).start()
+
     def _apply_health(self):
-        for key, label in {
+        for key, _label in {
             "audio": "Groq Audio",
             "review": "Groq Review",
             "notion": "Notion",
         }.items():
             value = self.health.get(key, "Unknown")
-            color = SUCCESS if value == "Connected" else WARN if value == "Disabled" else ERROR
+            color = (
+                SUCCESS
+                if value == "Connected"
+                else WARN
+                if value in {"Disabled", "Checking…", "Unknown"}
+                else ERROR
+            )
             self._health_labels[key].config(text=value, fg=color)
 
     def _render_dashboard(self):
@@ -513,17 +588,15 @@ class ListenerApp(tk.Tk):
             date = routing.get("date") or ""
             self.pipeline_title.config(text=title)
             self.pipeline_meta.config(text=f"{course}  {date}")
-            stage_index = 0
-            if current.get("status") == "done":
-                stage_index = 5
-            elif current.get("status") == "failed":
-                stage_index = 0
-            elif current.get("pending"):
-                stage_index = 4
-            elif current.get("status") == "processing":
-                stage_index = 2
-            else:
-                stage_index = 1
+            stage_index = {
+                "detected": 0,
+                "preparing_audio": 1,
+                "transcribing": 2,
+                "reviewing": 3,
+                "uploading": 4,
+                "complete": 5,
+                "error": 0,
+            }.get(current.get("stage"), 0)
             for idx, (dot, label) in enumerate(self.pipeline_step_vars):
                 dot.config(text="✓" if idx < stage_index else "○")
                 label.config(fg=ACCENT if idx < stage_index else MUTED)
@@ -533,7 +606,7 @@ class ListenerApp(tk.Tk):
         else:
             self.pipeline_title.config(text="No active lecture")
             self.pipeline_meta.config(text="Queue is clear")
-            for idx, (dot, label) in enumerate(self.pipeline_step_vars):
+            for _idx, (dot, label) in enumerate(self.pipeline_step_vars):
                 dot.config(text="○")
                 label.config(fg=MUTED)
 
@@ -556,7 +629,6 @@ class ListenerApp(tk.Tk):
 
     def refresh_all(self):
         self._refresh_jobs()
-        self._refresh_health()
         self._apply_health()
         self._render_dashboard()
         self._set_listener_button_text()
@@ -586,7 +658,9 @@ class ListenerApp(tk.Tk):
             )
             return
 
-        path = self.config.audio / f"recording_{datetime.now():%Y%m%d_%H%M%S}.wav"
+        staging = self.config.audio.parent / "Recording Staging"
+        staging.mkdir(parents=True, exist_ok=True)
+        path = staging / f"recording_{datetime.now():%Y%m%d_%H%M%S}.wav"
         path.parent.mkdir(parents=True, exist_ok=True)
         try:
             output = wave.open(str(path), "wb")
@@ -636,7 +710,18 @@ class ListenerApp(tk.Tk):
             messagebox.showerror("Recording error", str(exc))
             return
         self.record_btn.config(text="Record from Microphone", bg=ACCENT_SOFT)
-        self.record_status.config(text=f"Saved to Audio Inbox: {path.name}", fg=SUCCESS)
+        if not path.exists() or path.stat().st_size == 0:
+            path.unlink(missing_ok=True)
+            messagebox.showerror("Recording error", "The recording was empty and was not queued.")
+            return
+        destination = self.config.audio / path.name
+        self.config.audio.mkdir(parents=True, exist_ok=True)
+        try:
+            path.replace(destination)
+        except OSError as exc:
+            messagebox.showerror("Recording error", sanitize_error(exc))
+            return
+        self.record_status.config(text=f"Saved to Audio Inbox: {destination.name}", fg=SUCCESS)
 
     def close_app(self):
         if self._recording_stream is not None:
@@ -678,16 +763,14 @@ class ListenerApp(tk.Tk):
         self._set_listener_button_text()
 
     def retry_failed_jobs(self):
-        def worker():
-            try:
-                state = State(self.config.state)
-                failures = [str(row["path"]) for row in state.jobs() if row.get("status") == "failed"]
-                state.close()
-                for path in failures:
-                    subprocess.run([sys.executable, "-m", "courseai_lectures.cli", "process", path], cwd=str(self.env_path.parent), check=False)
-            finally:
-                self.after(0, self.refresh_all)
-        threading.Thread(target=worker, daemon=True).start()
+        state = State(self.config.state)
+        try:
+            for row in state.jobs():
+                if row.get("status") == "failed":
+                    state.set(row["path"], status="pending", stage="detected", next_retry=0, error=None)
+        finally:
+            state.close()
+        self.refresh_all()
 
     def view_error_details(self):
         rows = self._recent_jobs
@@ -701,27 +784,23 @@ class ListenerApp(tk.Tk):
     def process_file_dialog(self):
         path = filedialog.askopenfilename(
             title="Select lecture audio or transcript",
-            filetypes=[("Supported files", " ".join(AUDIO_EXTENSIONS))],
+            filetypes=[("Supported audio/transcript", " ".join(AUDIO_EXTENSIONS + ("*.txt",)))],
         )
         if not path:
             return
         self.process_file(Path(path))
 
     def process_file(self, path: Path):
-        def worker():
-            try:
-                state = State(self.config.state)
-                notion = Notion(self.config)
-                bridge = Bridge(self.config, state, notion)
-                ok = bridge.process(path)
-                notion.close()
-                state.close()
-                self.after(0, self.refresh_all)
-                if not ok:
-                    self.after(0, lambda: tk.messagebox.showwarning("Processing failed", f"Could not process {path.name}"))
-            except Exception as exc:  # pragma: no cover - UI fallback path
-                self.after(0, lambda: tk.messagebox.showerror("Processing error", str(exc)))
-        threading.Thread(target=worker, daemon=True).start()
+        path = path.resolve()
+        watched_roots = (self.config.audio.resolve(), self.config.transcripts.resolve())
+        if not any(path.is_relative_to(root) for root in watched_roots):
+            destination_root = self.config.audio if path.suffix.lower() in AUDIO_TYPES else self.config.transcripts
+            destination_root.mkdir(parents=True, exist_ok=True)
+            destination = destination_root / path.name
+            if destination.exists():
+                destination = destination_root / f"{path.stem}_{int(time.time())}{path.suffix}"
+            shutil.copy2(path, destination)
+        self.refresh_all()
 
     def _bind_shortcuts(self):
         self.bind("<Escape>", lambda _event: self.close_app())
