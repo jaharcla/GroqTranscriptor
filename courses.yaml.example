@@ -1,0 +1,7 @@
+# Map each CourseAI course code to the exact Notion course page ID.
+# Grounding never searches the whole workspace; this mapping is its trust boundary.
+KIN104: "00000000-0000-0000-0000-000000000000"
+KIN120: "00000000-0000-0000-0000-000000000000"
+BIOL130: "00000000-0000-0000-0000-000000000000"
+CHEM120: "00000000-0000-0000-0000-000000000000"
+HEALTH107: "00000000-0000-0000-0000-000000000000"

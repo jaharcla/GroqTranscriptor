@@ -5,7 +5,12 @@ import pytest
 
 from courseai_lectures.bridge import Bridge
 from courseai_lectures.files import Lecture
-from courseai_lectures.review import Reviewer, apply_corrections, normalize_review_result
+from courseai_lectures.review import (
+    Reviewer,
+    apply_corrections,
+    normalize_review_result,
+    summarize_review_document,
+)
 from courseai_lectures.state import State
 
 
@@ -18,14 +23,24 @@ def enable(config):
     return config
 
 
-def correction(original, replacement="fixed", reason="test"):
-    return {"original": original, "replacement": replacement, "reason": reason}
+def correction(original, replacement="fixed", reason="test", evidence=None):
+    return {
+        "original": original,
+        "replacement": replacement,
+        "reason": reason,
+        "evidence": evidence or ["transcript"],
+    }
 
 
 def test_corrections_preserve_other_characters():
     result = {
         "corrections": [
-            {"original": "new tons", "replacement": "newtons", "reason": "force unit"}
+            {
+                "original": "new tons",
+                "replacement": "newtons",
+                "reason": "force unit",
+                "evidence": ["transcript"],
+            }
         ],
         "flags": ["Check magnitude"],
     }
@@ -138,7 +153,7 @@ def test_bad_model_anchor_is_flagged_instead_of_failing_review(config):
     output = reviewer.review(raw, lecture)
 
     reviewed = output.split("REVIEWED TRANSCRIPT\n", 1)[1].split(
-        "\n\nCORRECTIONS AND REVIEW FLAGS", 1
+        "\n\nCORRECTIONS, REFERENCES, ASR QUALITY AND REVIEW FLAGS", 1
     )[0]
     assert reviewed == raw
     assert "Skipped model correction because its anchor was not found" in output
@@ -241,3 +256,92 @@ def test_random_route_stays_pinned_when_active_course_changes(config):
         assert notion.sync.call_args.args[0].date == "2026-09-28"
     finally:
         state.close()
+
+
+def test_review_metadata_marks_attention_and_course_mismatch(config):
+    reviewer = Reviewer(enable(config))
+    reviewer.call = Mock(
+        return_value={
+            "corrections": [],
+            "flags": ["COURSE MISMATCH: cardiovascular content conflicts with pinned course"],
+        }
+    )
+    lecture = Lecture("KIN120", "2026-09-28", "Lecture")
+    asr_quality = [
+        {
+            "start": 10.0,
+            "end": 12.0,
+            "reasons": ["avg_logprob=-0.80"],
+            "text": "unclear",
+            "retranscription": {"text": "cardiac output"},
+        }
+    ]
+
+    document, metadata = reviewer.review_with_metadata(
+        "A cardiovascular lecture.",
+        lecture,
+        {
+            "course": "KIN120",
+            "course_page_id": "course-page",
+            "sources": [],
+            "warnings": ["Using stale cached Notion course context because refresh failed."],
+        },
+        asr_quality,
+    )
+
+    assert summarize_review_document(document) == metadata
+    assert metadata["needs_review"] is True
+    assert metadata["course_mismatch"] is True
+    assert "ASR low confidence" in metadata["categories"]
+    assert "Course mismatch" in metadata["categories"]
+    assert metadata["flag_count"] == 3
+
+
+def test_audio_retranscription_is_allowed_evidence(config):
+    reviewer = Reviewer(enable(config))
+    reviewer.call = Mock(
+        return_value={
+            "corrections": [
+                correction(
+                    "microplastics",
+                    "microvasculature",
+                    evidence=["transcript", "audio-retranscription"],
+                )
+            ],
+            "flags": [],
+        }
+    )
+    lecture = Lecture("KIN120", "2026-09-28", "Lecture")
+    output = reviewer.review(
+        "blood quality of the microplastics",
+        lecture,
+        {"course": "KIN120", "course_page_id": "", "sources": [], "warnings": []},
+        [
+            {
+                "start": 0.0,
+                "end": 1.0,
+                "reasons": ["avg_logprob=-0.90"],
+                "retranscription": {"text": "blood volume in the microvasculature"},
+            }
+        ],
+    )
+    assert "microvasculature" in output.split("RAW TRANSCRIPT", 1)[0]
+
+
+def test_unknown_reference_evidence_is_rejected(config):
+    raw = "The force was three new tons."
+    result = {
+        "corrections": [
+            correction(
+                "three new tons",
+                "three newtons",
+                evidence=["transcript", "notion:invented-source"],
+            )
+        ],
+        "flags": [],
+    }
+
+    normalized = normalize_review_result(raw, result, {"notion:real-source"})
+
+    assert normalized["corrections"] == []
+    assert any("unknown evidence" in flag for flag in normalized["flags"])

@@ -24,7 +24,7 @@ class Config:
     retry_seconds: float = 30
     archive_audio: bool = False
     audio_enabled: bool = False
-    groq_audio_model: str = "whisper-large-v3-turbo"
+    groq_audio_model: str = "whisper-large-v3"
     audio_cache: Path = Path("audio-cache")
     active_course: str = ""
     lecture_date: str = ""
@@ -33,6 +33,14 @@ class Config:
     groq_model: str = "openai/gpt-oss-120b"
     review_dir: Path = Path("reviews")
     context_dir: Path = Path("review-context")
+    materials_dir: Path = Path("lecture-materials")
+    notion_context_enabled: bool = True
+    notion_context_cache_minutes: float = 30
+    notion_context_max_chars: int = 18000
+    notion_context_relations: tuple[str, ...] = ("Modules", "Syllabus", "Lecture materials", "Materials")
+    retranscribe_low_confidence: bool = True
+    retranscribe_max_segments: int = 6
+    retranscribe_padding_seconds: float = 2.0
 
 
 def load_config(env_file: Path) -> Config:
@@ -63,7 +71,7 @@ def load_config(env_file: Path) -> Config:
         active_course = sorted(courses)[0]
     config = Config(
         audio_enabled=get("GROQ_AUDIO_ENABLED", "false").lower() == "true",
-        groq_audio_model=get("GROQ_AUDIO_MODEL", "whisper-large-v3-turbo"),
+        groq_audio_model=get("GROQ_AUDIO_MODEL", "whisper-large-v3"),
         audio_cache=path("AUDIO_CACHE_DIR", "audio-cache"),
         active_course=active_course,
         lecture_date=get("LECTURE_DATE"),
@@ -72,6 +80,25 @@ def load_config(env_file: Path) -> Config:
         groq_model=get("GROQ_MODEL", "openai/gpt-oss-120b"),
         review_dir=path("REVIEW_DIR", "reviews"),
         context_dir=path("REVIEW_CONTEXT_DIR", "review-context"),
+        materials_dir=path("LECTURE_MATERIAL_DIR", f"{root}/Materials"),
+        notion_context_enabled=get("NOTION_REVIEW_CONTEXT", "true").lower() == "true",
+        notion_context_cache_minutes=float(get("REVIEW_CONTEXT_CACHE_MINUTES", "30")),
+        notion_context_max_chars=int(get("REVIEW_CONTEXT_MAX_CHARS", "18000")),
+        notion_context_relations=tuple(
+            item.strip()
+            for item in get(
+                "REVIEW_CONTEXT_RELATIONS",
+                "Modules,Syllabus,Lecture materials,Materials",
+            ).split(",")
+            if item.strip()
+        ),
+        retranscribe_low_confidence=get(
+            "RETRANSCRIBE_LOW_CONFIDENCE", "true"
+        ).lower() == "true",
+        retranscribe_max_segments=max(0, int(get("RETRANSCRIBE_MAX_SEGMENTS", "6"))),
+        retranscribe_padding_seconds=max(
+            0.0, float(get("RETRANSCRIBE_PADDING_SECONDS", "2"))
+        ),
         token=get("NOTION_TOKEN"),
         database_id=get("NOTION_DATABASE_ID"),
         data_source_id=get("NOTION_DATA_SOURCE_ID"),
@@ -91,6 +118,11 @@ def load_config(env_file: Path) -> Config:
                 "processing": "Processing",
                 "local_path": "Local transcript path",
                 "ingest_id": "Ingest ID",
+                "needs_review": "Needs review",
+                "review_flags": "Review flags",
+                "review_flag_count": "Review flag count",
+                "grounding_sources": "Grounding sources",
+                "asr_model": "ASR model",
             }.items()
         },
         stable_seconds=float(get("STABLE_SECONDS", "5")),

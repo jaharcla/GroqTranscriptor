@@ -341,8 +341,14 @@ class ListenerApp(tk.Tk):
             self.course_var.set(active)
             self.config.active_course = active
         elif courses:
-            self.course_var.set(courses[0])
-            self.config.active_course = courses[0]
+            fallback = courses[0]
+            self.course_var.set(fallback)
+            self.config.active_course = fallback
+            state = State(self.config.state)
+            try:
+                state.set_setting("active_course", fallback)
+            finally:
+                state.close()
         else:
             self.course_var.set("")
 
@@ -354,6 +360,68 @@ class ListenerApp(tk.Tk):
         state = State(self.config.state)
         try:
             state.set_setting("active_course", self.config.active_course)
+            state.set_setting("active_course_confirmed_at", time.time())
+        finally:
+            state.close()
+
+    def _selected_route(self, source: Path):
+        selected = self.course_var.get().strip().upper()
+        if selected not in self.config.courses:
+            raise ValueError("Choose the course for this lecture before recording or importing.")
+        match = re.fullmatch(r"([A-Za-z0-9]+)_(\\d{4}-\\d{2}-\\d{2})_(.+)", source.stem)
+        if match:
+            course, day, title = match.groups()
+            course = course.upper()
+            if course not in self.config.courses:
+                raise ValueError(f"Missing course mapping: {course}")
+            title = " ".join(title.replace("-", " ").split())
+        else:
+            course = selected
+            if getattr(self.config, "lecture_date", ""):
+                day = self.config.lecture_date
+            elif source.exists():
+                day = datetime.fromtimestamp(source.stat().st_mtime).date().isoformat()
+            else:
+                day = datetime.now().date().isoformat()
+            title = source.stem
+        return {"course": course, "date": day, "title": title}
+
+    def _pin_route(self, destination: Path, source: Path, overwrite=False):
+        route = self._selected_route(source)
+        state = State(self.config.state)
+        try:
+            state.ensure(destination)
+            row = state.get(destination)
+            if row.get("routing") and not overwrite:
+                return json.loads(row["routing"])
+            if row.get("status") == "done" and overwrite:
+                raise ValueError(
+                    "This file was already completed. Its pinned course was not changed."
+                )
+            state.set(
+                destination,
+                routing=json.dumps(route),
+                status="staging",
+                stage="detected",
+                next_retry=time.time() + 30,
+                error=None,
+            )
+            state.set_setting("active_course", route["course"])
+            state.set_setting("active_course_confirmed_at", time.time())
+        finally:
+            state.close()
+        return route
+
+    def _queue_pinned(self, destination: Path):
+        state = State(self.config.state)
+        try:
+            state.set(
+                destination,
+                status="pending",
+                stage="detected",
+                next_retry=0,
+                error=None,
+            )
         finally:
             state.close()
 
@@ -649,6 +717,19 @@ class ListenerApp(tk.Tk):
             self.start_recording()
 
     def start_recording(self):
+        selected = self.course_var.get().strip().upper()
+        if selected not in self.config.courses:
+            messagebox.showerror(
+                "Choose course",
+                "Choose the course for this lecture before recording.",
+            )
+            return
+        if not messagebox.askyesno(
+            "Confirm lecture course",
+            f"Record this lecture as {selected}?\\n\\n"
+            "This course will be pinned to the recording before transcription.",
+        ):
+            return
         try:
             import sounddevice as sd
         except ImportError:
@@ -693,7 +774,7 @@ class ListenerApp(tk.Tk):
         self._recording_path = path
         self._recording_stream = stream
         self.record_btn.config(text="Stop Recording", bg="#6b2737")
-        self.record_status.config(text=f"Recording: {path.name}", fg=ERROR)
+        self.record_status.config(text=f"Recording {selected}: {path.name}", fg=ERROR)
 
     def stop_recording(self):
         stream = self._recording_stream
@@ -716,12 +797,21 @@ class ListenerApp(tk.Tk):
             return
         destination = self.config.audio / path.name
         self.config.audio.mkdir(parents=True, exist_ok=True)
+        if destination.exists():
+            destination = self.config.audio / (
+                f"{path.stem}_{datetime.now():%Y%m%d_%H%M%S_%f}{path.suffix}"
+            )
         try:
+            route = self._pin_route(destination, path)
             path.replace(destination)
-        except OSError as exc:
+            self._queue_pinned(destination)
+        except (OSError, ValueError) as exc:
             messagebox.showerror("Recording error", sanitize_error(exc))
             return
-        self.record_status.config(text=f"Saved to Audio Inbox: {destination.name}", fg=SUCCESS)
+        self.record_status.config(
+            text=f"Queued {route['course']}: {destination.name}",
+            fg=SUCCESS,
+        )
 
     def close_app(self):
         if self._recording_stream is not None:
@@ -792,14 +882,50 @@ class ListenerApp(tk.Tk):
 
     def process_file(self, path: Path):
         path = path.resolve()
+        selected = self.course_var.get().strip().upper()
+        if selected not in self.config.courses:
+            messagebox.showerror(
+                "Choose course",
+                "Choose the course for this lecture before importing it.",
+            )
+            return
         watched_roots = (self.config.audio.resolve(), self.config.transcripts.resolve())
-        if not any(path.is_relative_to(root) for root in watched_roots):
-            destination_root = self.config.audio if path.suffix.lower() in AUDIO_TYPES else self.config.transcripts
-            destination_root.mkdir(parents=True, exist_ok=True)
-            destination = destination_root / path.name
-            if destination.exists():
-                destination = destination_root / f"{path.stem}_{int(time.time())}{path.suffix}"
-            shutil.copy2(path, destination)
+        try:
+            if any(path.is_relative_to(root) for root in watched_roots):
+                route = self._pin_route(path, path, overwrite=True)
+                self._queue_pinned(path)
+                self.record_status.config(
+                    text=f"Queued {route['course']}: {path.name}",
+                    fg=SUCCESS,
+                )
+            else:
+                destination_root = (
+                    self.config.audio
+                    if path.suffix.lower() in AUDIO_TYPES
+                    else self.config.transcripts
+                )
+                destination_root.mkdir(parents=True, exist_ok=True)
+                destination = destination_root / path.name
+                if destination.exists():
+                    destination = destination_root / (
+                        f"{path.stem}_{datetime.now():%Y%m%d_%H%M%S_%f}{path.suffix}"
+                    )
+                temporary = destination.with_name(destination.name + ".courseai-part")
+                shutil.copy2(path, temporary)
+                try:
+                    route = self._pin_route(destination, path)
+                    os.replace(temporary, destination)
+                    self._queue_pinned(destination)
+                except Exception:
+                    temporary.unlink(missing_ok=True)
+                    raise
+                self.record_status.config(
+                    text=f"Queued {route['course']}: {destination.name}",
+                    fg=SUCCESS,
+                )
+        except (OSError, ValueError) as exc:
+            messagebox.showerror("Import error", sanitize_error(exc))
+            return
         self.refresh_all()
 
     def _bind_shortcuts(self):
