@@ -335,4 +335,4 @@ class CourseGrounder:
             f"Course references: {'; '.join(titles[:8])}. "
             f"Use these spellings/terms when supported by the audio: {' '.join(snippets)[:650]}"
         )
-        return prompt[:900]
+        return prompt[:800]
