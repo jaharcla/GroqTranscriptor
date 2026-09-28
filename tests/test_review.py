@@ -148,7 +148,7 @@ def test_bad_model_anchor_is_flagged_instead_of_failing_review(config):
     output = reviewer.review(raw, lecture)
 
     reviewed = output.split("REVIEWED TRANSCRIPT\n", 1)[1].split(
-        "\n\nCORRECTIONS AND REVIEW FLAGS", 1
+        "\n\nCORRECTIONS, REFERENCES, ASR QUALITY AND REVIEW FLAGS", 1
     )[0]
     assert reviewed == raw
     assert "Skipped model correction because its anchor was not found" in output
