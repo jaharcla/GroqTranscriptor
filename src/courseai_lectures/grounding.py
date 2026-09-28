@@ -64,8 +64,7 @@ def _material_text(path, limit):
                 total += len(text)
             if total >= limit:
                 break
-        return "
-".join(parts)[:limit]
+        return "\n".join(parts)[:limit]
     if suffix == ".pptx":
         from pptx import Presentation
 
@@ -84,14 +83,12 @@ def _material_text(path, limit):
                         if cells:
                             slide_text.append(" | ".join(cells))
             if slide_text:
-                value = f"[Slide {index}] " + "
-".join(slide_text)
+                value = f"[Slide {index}] " + "\n".join(slide_text)
                 parts.append(value)
                 total += len(value)
             if total >= limit:
                 break
-        return "
-".join(parts)[:limit]
+        return "\n".join(parts)[:limit]
     return ""
 
 
