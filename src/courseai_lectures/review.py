@@ -22,8 +22,11 @@ Each flag is a string explaining unresolved wording and quoting its nearby ancho
 Use empty arrays when nothing needs correction. Do not reconstruct missing speech.
 """
 
+CHUNK_SIZE = 8000
+CONTEXT_SIZE = 600
 
-def apply_corrections(raw, result):
+
+def _validate_result(result):
     if not isinstance(result, dict) or set(result) != {"corrections", "flags"}:
         raise ValueError("Groq review returned an invalid object")
     corrections, flags = result["corrections"], result["flags"]
@@ -31,12 +34,80 @@ def apply_corrections(raw, result):
         raise ValueError("Groq review arrays missing")
     if any(not isinstance(flag, str) for flag in flags):
         raise ValueError("Groq review flags must be strings")
-    edits = []
     for item in corrections:
         if not isinstance(item, dict) or set(item) != {"original", "replacement", "reason"}:
             raise ValueError("Invalid correction record")
         if any(not isinstance(v, str) or not v.strip() for v in item.values()):
             raise ValueError("Blank or invalid correction field")
+    return corrections, flags
+
+
+def _anchor_preview(text, limit=120):
+    compact = " ".join(text.split())
+    return compact if len(compact) <= limit else compact[: limit - 1] + "…"
+
+
+def _pathological_replacement(original, replacement):
+    """Reject obviously destructive model edits while allowing normal phrase fixes."""
+    old_len = len(original)
+    new_len = len(replacement)
+    if new_len > max(400, old_len * 4):
+        return True
+    if old_len >= 80 and new_len < max(8, old_len // 5):
+        return True
+    return False
+
+
+def normalize_review_result(raw, result):
+    """Keep safe corrections and turn semantic model mistakes into review flags."""
+    corrections, flags = _validate_result(result)
+    accepted = []
+    accepted_ranges = []
+    normalized_flags = list(flags)
+
+    for item in corrections:
+        original = item["original"]
+        replacement = item["replacement"]
+        count = raw.count(original)
+        preview = _anchor_preview(original)
+
+        if count == 0:
+            normalized_flags.append(
+                f"Skipped model correction because its anchor was not found: {preview!r}"
+            )
+            continue
+        if count != 1:
+            normalized_flags.append(
+                f"Skipped model correction because its anchor was ambiguous ({count} matches): "
+                f"{preview!r}"
+            )
+            continue
+        if _pathological_replacement(original, replacement):
+            normalized_flags.append(
+                f"Skipped model correction because the replacement was disproportionately large "
+                f"or destructive: {preview!r}"
+            )
+            continue
+
+        start = raw.index(original)
+        end = start + len(original)
+        overlaps = any(\n            start < existing_end and end > existing_start\n            for existing_start, existing_end in accepted_ranges\n        )\n        if overlaps:
+            normalized_flags.append(
+                f"Skipped model correction because it overlapped another accepted correction: "
+                f"{preview!r}"
+            )
+            continue
+
+        accepted.append(item)
+        accepted_ranges.append((start, end))
+
+    return {"corrections": accepted, "flags": normalized_flags}
+
+
+def apply_corrections(raw, result):
+    corrections, _flags = _validate_result(result)
+    edits = []
+    for item in corrections:
         old = item["original"]
         if raw.count(old) != 1:
             raise ValueError("Correction anchor missing or ambiguous; review will retry")
@@ -63,6 +134,40 @@ class Reviewer:
             raise ValueError("Course review context exceeds 24000 characters; shorten it")
         return text
 
+    def _review_payload(self, raw, lecture, offset, context):
+        chunk = raw[offset : offset + CHUNK_SIZE]
+        return {
+            "course": lecture.course,
+            "date": lecture.date,
+            "title": lecture.title,
+            "reference_text": context or "No official course reference supplied",
+            "chunk_start_character": offset,
+            "preceding_context_do_not_edit": raw[max(0, offset - CONTEXT_SIZE) : offset],
+            "following_context_do_not_edit": raw[
+                offset + CHUNK_SIZE : offset + CHUNK_SIZE + CONTEXT_SIZE
+            ],
+            "transcript_chunk": chunk,
+        }
+
+    def _part_digest(self, raw, lecture, offset, context):
+        payload = self._review_payload(raw, lecture, offset, context)
+        fingerprint = [
+            payload,
+            lecture.key,
+            self.skill,
+            ADAPTER,
+            self.config.groq_model,
+            "review-part-v2",
+        ]
+        return hashlib.sha256(
+            json.dumps(fingerprint, ensure_ascii=False, sort_keys=True).encode()
+        ).hexdigest()
+
+    def _part_cache(self, raw, lecture, offset, context):
+        return self.config.review_dir / "parts" / (
+            self._part_digest(raw, lecture, offset, context) + ".json"
+        )
+
     def digest(self, raw, lecture):
         payload = [
             raw,
@@ -71,7 +176,7 @@ class Reviewer:
             ADAPTER,
             self.config.groq_model,
             self.context(lecture),
-            "review-v1",
+            "review-v2",
         ]
         return hashlib.sha256(json.dumps(payload, ensure_ascii=False).encode()).hexdigest()
 
@@ -112,51 +217,58 @@ class Reviewer:
         )
         apply_corrections("Connection check", result)
 
+    def _review_part(self, raw, lecture, offset, context):
+        chunk = raw[offset : offset + CHUNK_SIZE]
+        cache = self._part_cache(raw, lecture, offset, context)
+        if cache.exists():
+            result = json.loads(cache.read_text(encoding="utf-8"))
+            return normalize_review_result(chunk, result)
+
+        result = self.call(
+            [
+                {"role": "system", "content": self.skill + "\n" + ADAPTER},
+                {
+                    "role": "user",
+                    "content": json.dumps(
+                        self._review_payload(raw, lecture, offset, context),
+                        ensure_ascii=False,
+                    ),
+                },
+            ]
+        )
+        normalized = normalize_review_result(chunk, result)
+        cache.parent.mkdir(parents=True, exist_ok=True)
+        temporary = cache.with_suffix(".tmp")
+        temporary.write_text(
+            json.dumps(normalized, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        os.replace(temporary, cache)
+        return normalized
+
     def review(self, raw, lecture):
         cache = self.config.review_dir / (self.digest(raw, lecture) + ".json")
+        parts = [raw[i : i + CHUNK_SIZE] for i in range(0, len(raw), CHUNK_SIZE)]
         if cache.exists():
             data = json.loads(cache.read_text(encoding="utf-8"))
+            if len(parts) != len(data.get("parts", [])):
+                raise ValueError("Review cache is incomplete")
+            normalized_parts = [
+                normalize_review_result(part, result)
+                for part, result in zip(parts, data["parts"], strict=True)
+            ]
+            data = {"model": data.get("model", self.config.groq_model), "parts": normalized_parts}
         else:
-            data = {"model": self.config.groq_model, "parts": []}
             context = self.context(lecture)
-            # Bound each request; every source character belongs to exactly one chunk.
-            for offset in range(0, len(raw), 8000):
-                chunk = raw[offset : offset + 8000]
-                result = self.call(
-                    [
-                        {"role": "system", "content": self.skill + "\n" + ADAPTER},
-                        {
-                            "role": "user",
-                            "content": json.dumps(
-                                {
-                                    "course": lecture.course,
-                                    "date": lecture.date,
-                                    "title": lecture.title,
-                                    "reference_text": context
-                                    or "No official course reference supplied",
-                                    "chunk_start_character": offset,
-                                    "preceding_context_do_not_edit": raw[
-                                        max(0, offset - 600) : offset
-                                    ],
-                                    "following_context_do_not_edit": raw[
-                                        offset + 8000 : offset + 8600
-                                    ],
-                                    "transcript_chunk": chunk,
-                                },
-                                ensure_ascii=False,
-                            ),
-                        },
-                    ]
-                )
-                apply_corrections(chunk, result)
-                data["parts"].append(result)
+            data = {"model": self.config.groq_model, "parts": []}
+            for offset in range(0, len(raw), CHUNK_SIZE):
+                data["parts"].append(self._review_part(raw, lecture, offset, context))
             cache.parent.mkdir(parents=True, exist_ok=True)
             temporary = cache.with_suffix(".tmp")
-            temporary.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+            temporary.write_text(
+                json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
             os.replace(temporary, cache)
-        parts = [raw[i : i + 8000] for i in range(0, len(raw), 8000)]
-        if len(parts) != len(data["parts"]):
-            raise ValueError("Review cache is incomplete")
+
         reviewed = "".join(
             apply_corrections(part, result)
             for part, result in zip(parts, data["parts"], strict=True)

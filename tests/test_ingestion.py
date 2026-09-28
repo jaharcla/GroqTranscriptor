@@ -1,5 +1,6 @@
 import copy
 import json
+import os
 
 import httpx
 import pytest
@@ -230,6 +231,7 @@ def test_unknown_write_blocks_same_lecture_at_other_path(setup):
     assert server.page_creates == 0
 
 
+@pytest.mark.skipif(os.name != "nt", reason="audio archival uses Windows rename semantics")
 def test_opt_in_archive_preserves_subfolders_and_never_overwrites(setup):
     bridge, server, path = setup
     bridge.config.archive_audio = True

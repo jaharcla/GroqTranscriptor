@@ -5,7 +5,7 @@ import pytest
 
 from courseai_lectures.bridge import Bridge
 from courseai_lectures.files import Lecture
-from courseai_lectures.review import Reviewer, apply_corrections
+from courseai_lectures.review import Reviewer, apply_corrections, normalize_review_result
 from courseai_lectures.state import State
 
 
@@ -18,21 +18,65 @@ def enable(config):
     return config
 
 
+def correction(original, replacement="fixed", reason="test"):
+    return {"original": original, "replacement": replacement, "reason": reason}
+
+
 def test_corrections_preserve_other_characters():
     result = {
-        "corrections": [{"original": "new tons", "replacement": "newtons", "reason": "force unit"}],
+        "corrections": [
+            {"original": "new tons", "replacement": "newtons", "reason": "force unit"}
+        ],
         "flags": ["Check magnitude"],
     }
     assert apply_corrections("Force: 3 new tons.\n", result) == "Force: 3 newtons.\n"
 
 
 @pytest.mark.parametrize("old", ["absent", "a"])
-def test_invalid_anchor_rejected(old):
+def test_apply_corrections_remains_strict_for_invalid_anchor(old):
     with pytest.raises(ValueError):
         apply_corrections(
             "a a",
-            {"corrections": [{"original": old, "replacement": "b", "reason": "test"}], "flags": []},
+            {"corrections": [correction(old, "b")], "flags": []},
         )
+
+
+def test_review_normalization_skips_missing_and_ambiguous_anchors():
+    raw = "alpha beta beta gamma"
+    result = {
+        "corrections": [
+            correction("missing", "present"),
+            correction("beta", "delta"),
+            correction("alpha", "ALPHA"),
+        ],
+        "flags": [],
+    }
+
+    normalized = normalize_review_result(raw, result)
+
+    assert normalized["corrections"] == [correction("alpha", "ALPHA")]
+    assert len(normalized["flags"]) == 2
+    assert "not found" in normalized["flags"][0]
+    assert "ambiguous" in normalized["flags"][1]
+    assert apply_corrections(raw, normalized) == "ALPHA beta beta gamma"
+
+
+def test_review_normalization_skips_overlap_and_pathological_expansion():
+    raw = "The force was three new tons in this example."
+    result = {
+        "corrections": [
+            correction("three new tons", "three newtons"),
+            correction("new tons", "newtons"),
+            correction("force", "x" * 500),
+        ],
+        "flags": [],
+    }
+
+    normalized = normalize_review_result(raw, result)
+
+    assert normalized["corrections"] == [correction("three new tons", "three newtons")]
+    assert any("overlapped" in flag for flag in normalized["flags"])
+    assert any("disproportionately" in flag for flag in normalized["flags"])
 
 
 def test_review_cache_and_raw_retention(config):
@@ -47,6 +91,57 @@ def test_review_cache_and_raw_retention(config):
     assert reviewer.review(raw, lecture) == output
     assert reviewer.call.call_count == 3
     assert reviewer.digest(raw, lecture) != reviewer.digest(raw + "B", lecture)
+
+
+def test_successful_review_chunks_survive_later_failure(config):
+    reviewer = Reviewer(enable(config))
+    lecture = Lecture("KIN120", "2026-09-28", "Lecture")
+    raw = "A" * 17001
+    reviewer.call = Mock(
+        side_effect=[
+            {"corrections": [], "flags": ["part 1"]},
+            {"corrections": [], "flags": ["part 2"]},
+            RuntimeError("Groq HTTP 429"),
+        ]
+    )
+
+    with pytest.raises(RuntimeError, match="429"):
+        reviewer.review(raw, lecture)
+    assert reviewer.call.call_count == 3
+
+    reviewer.call = Mock(return_value={"corrections": [], "flags": ["part 3"]})
+    output = reviewer.review(raw, lecture)
+
+    assert reviewer.call.call_count == 1
+    assert '"part 1"' in output
+    assert '"part 2"' in output
+    assert '"part 3"' in output
+
+
+def test_bad_model_anchor_is_flagged_instead_of_failing_review(config):
+    reviewer = Reviewer(enable(config))
+    lecture = Lecture("KIN120", "2026-09-28", "Lecture")
+    raw = "Vectors can be represented by magnitude and direction."
+    reviewer.call = Mock(
+        return_value={
+            "corrections": [
+                correction(
+                    "this anchor does not exist",
+                    "corrected wording",
+                    "model guessed an anchor",
+                )
+            ],
+            "flags": [],
+        }
+    )
+
+    output = reviewer.review(raw, lecture)
+
+    reviewed = output.split("REVIEWED TRANSCRIPT\n", 1)[1].split(
+        "\n\nCORRECTIONS AND REVIEW FLAGS", 1
+    )[0]
+    assert reviewed == raw
+    assert "Skipped model correction because its anchor was not found" in output
 
 
 def test_failure_does_not_upload_or_mark_done(config):
@@ -100,7 +195,9 @@ def test_truncated_response_rejected(config, monkeypatch):
                     "choices": [
                         {
                             "finish_reason": "length",
-                            "message": {"content": json.dumps({"corrections": [], "flags": []})},
+                            "message": {
+                                "content": json.dumps({"corrections": [], "flags": []})
+                            },
                         }
                     ]
                 },
