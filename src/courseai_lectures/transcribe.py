@@ -167,16 +167,15 @@ class Transcriber:
     def request(self, path, prompt=""):
         if path.stat().st_size >= 25_000_000:
             raise ValueError("Prepared audio chunk exceeds the upload limit")
-        data = [
-            ("model", self.config.groq_audio_model),
-            ("language", "en"),
-            ("response_format", "verbose_json"),
-            ("temperature", "0"),
-            ("timestamp_granularities[]", "segment"),
-            ("timestamp_granularities[]", "word"),
-        ]
+        data = {
+            "model": self.config.groq_audio_model,
+            "language": "en",
+            "response_format": "verbose_json",
+            "temperature": "0",
+            "timestamp_granularities[]": ["segment", "word"],
+        }
         if prompt.strip():
-            data.append(("prompt", prompt.strip()[:900]))
+            data["prompt"] = prompt.strip()[:900]
         try:
             with path.open("rb") as audio, httpx.Client(timeout=180) as client:
                 response = client.post(
