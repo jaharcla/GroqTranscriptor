@@ -24,7 +24,7 @@ class Config:
     retry_seconds: float = 30
     archive_audio: bool = False
     audio_enabled: bool = False
-    groq_audio_model: str = "whisper-large-v3-turbo"
+    groq_audio_model: str = "whisper-large-v3"
     audio_cache: Path = Path("audio-cache")
     active_course: str = ""
     lecture_date: str = ""
@@ -32,7 +32,7 @@ class Config:
     groq_api_key: str = ""
     groq_model: str = "openai/gpt-oss-120b"
     review_dir: Path = Path("reviews")
-    context_dir: Path = Path("review-context")
+    context_dir: Path = Path("review-context")\n    materials_dir: Path = Path("lecture-materials")\n    notion_context_enabled: bool = True\n    notion_context_cache_minutes: float = 30\n    notion_context_max_chars: int = 18000\n    notion_context_relations: tuple[str, ...] = ("Modules", "Syllabus")
 
 
 def load_config(env_file: Path) -> Config:
@@ -63,7 +63,7 @@ def load_config(env_file: Path) -> Config:
         active_course = sorted(courses)[0]
     config = Config(
         audio_enabled=get("GROQ_AUDIO_ENABLED", "false").lower() == "true",
-        groq_audio_model=get("GROQ_AUDIO_MODEL", "whisper-large-v3-turbo"),
+        groq_audio_model=get("GROQ_AUDIO_MODEL", "whisper-large-v3"),
         audio_cache=path("AUDIO_CACHE_DIR", "audio-cache"),
         active_course=active_course,
         lecture_date=get("LECTURE_DATE"),
@@ -71,7 +71,7 @@ def load_config(env_file: Path) -> Config:
         groq_api_key=get("GROQ_API_KEY"),
         groq_model=get("GROQ_MODEL", "openai/gpt-oss-120b"),
         review_dir=path("REVIEW_DIR", "reviews"),
-        context_dir=path("REVIEW_CONTEXT_DIR", "review-context"),
+        context_dir=path("REVIEW_CONTEXT_DIR", "review-context"),\n        materials_dir=path("LECTURE_MATERIAL_DIR", f"{root}/Materials"),\n        notion_context_enabled=get("NOTION_REVIEW_CONTEXT", "true").lower() == "true",\n        notion_context_cache_minutes=float(get("REVIEW_CONTEXT_CACHE_MINUTES", "30")),\n        notion_context_max_chars=int(get("REVIEW_CONTEXT_MAX_CHARS", "18000")),\n        notion_context_relations=tuple(\n            item.strip()\n            for item in get("REVIEW_CONTEXT_RELATIONS", "Modules,Syllabus").split(",")\n            if item.strip()\n        ),
         token=get("NOTION_TOKEN"),
         database_id=get("NOTION_DATABASE_ID"),
         data_source_id=get("NOTION_DATA_SOURCE_ID"),
