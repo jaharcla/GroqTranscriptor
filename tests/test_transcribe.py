@@ -35,7 +35,7 @@ def test_real_decoder_chunking_and_cache(config):
     transcriber = Transcriber(config)
     sizes = []
 
-    def request(path):
+    def request(path, prompt=""):
         sizes.append(path.stat().st_size)
         return f"Chunk {len(sizes)}"
 
