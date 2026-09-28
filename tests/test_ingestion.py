@@ -6,6 +6,7 @@ import httpx
 import pytest
 
 from courseai_lectures.bridge import Bridge
+from courseai_lectures.files import Lecture
 from courseai_lectures.notion import Notion, block_text, chunks
 from courseai_lectures.state import State
 
@@ -47,6 +48,11 @@ class Server:
                 "Ingest ID": "rich_text",
                 "Capture method": "select",
                 "Processing": "status",
+                "Needs review": "checkbox",
+                "Review flags": "multi_select",
+                "Review flag count": "number",
+                "Grounding sources": "rich_text",
+                "ASR model": "rich_text",
             }
             result = {
                 "properties": {
@@ -193,6 +199,51 @@ def test_processing_set_only_after_complete(setup):
     assert "Processing" not in server.pages[0]["properties"]
     assert bridge.process(path)
     assert server.pages[0]["properties"]["Processing"] == {"status": {"name": "Transcribed"}}
+
+
+def test_review_metadata_written_to_optional_properties(setup):
+    bridge, server, path = setup
+    bridge.config.props.update(
+        {
+            "needs_review": "Needs review",
+            "review_flags": "Review flags",
+            "review_flag_count": "Review flag count",
+            "grounding_sources": "Grounding sources",
+            "asr_model": "ASR model",
+        }
+    )
+    bridge.state.ensure(path)
+    meta = {
+        "needs_review": True,
+        "categories": ["ASR low confidence", "Reviewer flags"],
+        "flag_count": 4,
+        "grounding_sources": [
+            {"id": "notion:slides", "title": "Cardiovascular Physiology Slides"}
+        ],
+        "asr_model": "whisper-large-v3",
+    }
+
+    bridge.notion.sync(
+        Lecture("KIN120", "2026-09-28", "3D Vectors"),
+        "Reviewed transcript",
+        path,
+        bridge.state,
+        review_meta=meta,
+    )
+
+    props = server.pages[0]["properties"]
+    assert props["Needs review"] == {"checkbox": True}
+    assert props["Review flag count"] == {"number": 4}
+    assert props["Review flags"] == {
+        "multi_select": [
+            {"name": "ASR low confidence"},
+            {"name": "Reviewer flags"},
+        ]
+    }
+    assert props["Grounding sources"]["rich_text"][0]["text"]["content"] == (
+        "Cardiovascular Physiology Slides"
+    )
+    assert props["ASR model"]["rich_text"][0]["text"]["content"] == "whisper-large-v3"
 
 
 def test_missing_course_leaves_no_page(setup):
