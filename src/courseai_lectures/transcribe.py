@@ -172,10 +172,14 @@ class Transcriber:
             "language": "en",
             "response_format": "verbose_json",
             "temperature": "0",
-            "timestamp_granularities[]": ["segment", "word"],
+            # Segment timestamps include the confidence metadata CourseAI needs.
+            # Keep the direct HTTP path conservative; word timestamps are optional.
+            "timestamp_granularities[]": "segment",
         }
         if prompt.strip():
-            data["prompt"] = prompt.strip()[:900]
+            # Groq documents a 224-token prompt limit. A conservative character
+            # cap avoids 400s from unusually token-dense course material.
+            data["prompt"] = prompt.strip()[:600]
         try:
             with path.open("rb") as audio, httpx.Client(timeout=180) as client:
                 response = client.post(
@@ -187,7 +191,21 @@ class Transcriber:
         except httpx.HTTPError:
             raise RuntimeError("Groq audio connection failed; queued for retry") from None
         if response.is_error:
-            raise RuntimeError(f"Groq audio HTTP {response.status_code}; queued for retry")
+            detail = ""
+            try:
+                payload = response.json()
+                error = payload.get("error", payload) if isinstance(payload, dict) else {}
+                if isinstance(error, dict):
+                    message = str(error.get("message") or error.get("code") or "").strip()
+                    detail = " ".join(message.split())[:300]
+            except ValueError:
+                pass
+            if self.config.groq_api_key and detail:
+                detail = detail.replace(self.config.groq_api_key, "[REDACTED]")
+            suffix = f": {detail}" if detail else ""
+            raise RuntimeError(
+                f"Groq audio HTTP {response.status_code}{suffix}; queued for retry"
+            )
         try:
             body = response.json()
         except ValueError:
@@ -231,7 +249,7 @@ class Transcriber:
                     prompt
                     + " Short uncertain lecture excerpt. Preserve the exact spoken wording "
                     "and use course terminology only when the audio supports it."
-                )[:900]
+                )[:600]
                 candidate = _response(self.request(clip, repair_prompt))
                 atomic_json(candidate_cache, candidate)
             candidate_text = candidate["text"].strip()
@@ -263,11 +281,11 @@ class Transcriber:
             digest.update(
                 (
                     self.config.groq_audio_model
-                    + "|en|480|overlap5|verbose-segments-words|"
-                    + prompt
+                    + "|en|480|overlap5|verbose-segments|"
+                    + prompt[:600]
                     + f"|repair={getattr(self.config, 'retranscribe_low_confidence', True)}"
                     + f"|repair-max={getattr(self.config, 'retranscribe_max_segments', 6)}"
-                    + "|v3"
+                    + "|v4"
                 ).encode()
             )
             cache = self.config.audio_cache / digest.hexdigest()
@@ -322,7 +340,7 @@ class Transcriber:
                         if previous_text
                         else ""
                     )
-                    result = _response(self.request(chunk, (prompt + continuity)[:900]))
+                    result = _response(self.request(chunk, (prompt + continuity)[:600]))
                     atomic_json(item, result)
 
                 kept = []
