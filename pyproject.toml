@@ -11,6 +11,7 @@ dependencies = ["imageio-ffmpeg>=0.6,<1", "httpx>=0.27,<1", "watchdog>=4,<7", "p
 
 [project.optional-dependencies]
 dev = ["pytest>=8,<10", "ruff>=0.9,<1"]
+local-asr = ["faster-whisper>=1.1,<2"]
 
 [project.scripts]
 courseai-lectures = "courseai_lectures.cli:main"
