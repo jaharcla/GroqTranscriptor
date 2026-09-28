@@ -1,4 +1,4 @@
- from courseai_lectures.files import Lecture
+from courseai_lectures.files import Lecture
 from courseai_lectures.grounding import CourseGrounder
 
 
