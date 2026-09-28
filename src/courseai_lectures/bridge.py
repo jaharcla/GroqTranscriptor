@@ -113,6 +113,31 @@ class Bridge:
                     self.config.stable_timeout,
                 )
 
+            context_warnings = context.get("warnings", [])
+            review_meta = {
+                "needs_review": bool(asr_quality or context_warnings),
+                "categories": (
+                    (["ASR low confidence"] if asr_quality else [])
+                    + (["Grounding warning"] if context_warnings else [])
+                ),
+                "flag_count": len(asr_quality) + len(context_warnings),
+                "flags": [],
+                "asr_quality": asr_quality,
+                "context_warnings": context_warnings,
+                "course_mismatch": False,
+                "grounding_sources": [
+                    {
+                        "id": source.get("id", ""),
+                        "type": source.get("type", ""),
+                        "title": source.get("title", ""),
+                    }
+                    for source in context.get("sources", [])
+                ],
+                "asr_model": (
+                    getattr(self.config, "groq_audio_model", "") if is_audio else ""
+                ),
+            }
+
             digest = hashlib.sha256(text.encode()).hexdigest()
             if self.reviewer:
                 digest = self.reviewer.digest(text, lecture, context, asr_quality)
@@ -128,9 +153,23 @@ class Bridge:
                     self.notion.prepare()
                     self.notion.recover(self.state, other["path"])
             if self.reviewer:
-                text = self.reviewer.review(text, lecture, context, asr_quality)
+                text, review_meta = self.reviewer.review_with_metadata(
+                    text,
+                    lecture,
+                    context,
+                    asr_quality,
+                )
+                review_meta["asr_model"] = (
+                    getattr(self.config, "groq_audio_model", "") if is_audio else ""
+                )
             self.state.set(path, stage="uploading")
-            page = self.notion.sync(lecture, text, path, self.state)
+            page = self.notion.sync(
+                lecture,
+                text,
+                path,
+                self.state,
+                review_meta=review_meta,
+            )
             if not is_audio:
                 self.archive_audio(path)
             self.state.set(
