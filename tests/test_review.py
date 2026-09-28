@@ -241,3 +241,22 @@ def test_random_route_stays_pinned_when_active_course_changes(config):
         assert notion.sync.call_args.args[0].date == "2026-09-28"
     finally:
         state.close()
+
+
+def test_unknown_reference_evidence_is_rejected(config):
+    raw = "The force was three new tons."
+    result = {
+        "corrections": [
+            correction(
+                "three new tons",
+                "three newtons",
+                evidence=["transcript", "notion:invented-source"],
+            )
+        ],
+        "flags": [],
+    }
+
+    normalized = normalize_review_result(raw, result, {"notion:real-source"})
+
+    assert normalized["corrections"] == []
+    assert any("unknown evidence" in flag for flag in normalized["flags"])
