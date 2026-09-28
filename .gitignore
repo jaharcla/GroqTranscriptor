@@ -1,0 +1,13 @@
+.env
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.benchmarks/
+audio-cache/
+reviews/
+review-context/
+*.sqlite3
+*.sqlite3-*
+backup-before-*/

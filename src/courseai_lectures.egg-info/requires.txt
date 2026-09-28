@@ -1,0 +1,10 @@
+imageio-ffmpeg<1,>=0.6
+httpx<1,>=0.27
+watchdog<7,>=4
+python-dotenv<2,>=1
+PyYAML<7,>=6
+filelock<4,>=3.13
+
+[dev]
+pytest<10,>=8
+ruff<1,>=0.9
