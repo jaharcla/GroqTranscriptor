@@ -18,14 +18,24 @@ def enable(config):
     return config
 
 
-def correction(original, replacement="fixed", reason="test"):
-    return {"original": original, "replacement": replacement, "reason": reason}
+def correction(original, replacement="fixed", reason="test", evidence=None):
+    return {
+        "original": original,
+        "replacement": replacement,
+        "reason": reason,
+        "evidence": evidence or ["transcript"],
+    }
 
 
 def test_corrections_preserve_other_characters():
     result = {
         "corrections": [
-            {"original": "new tons", "replacement": "newtons", "reason": "force unit", "evidence": ["transcript"]}
+            {
+                "original": "new tons",
+                "replacement": "newtons",
+                "reason": "force unit",
+                "evidence": ["transcript"],
+            }
         ],
         "flags": ["Check magnitude"],
     }
