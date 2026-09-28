@@ -65,15 +65,24 @@ unknown/fabricated source ID are rejected in code. The raw transcript is always 
 - Audio is normalized locally to 16 kHz mono PCM with bundled FFmpeg.
 - Long recordings are split into eight-minute chunks with five seconds of overlap.
 - Groq receives a short course-specific spelling/context prompt derived from the pinned course.
-- The API response uses verbose segment metadata. CourseAI records low-confidence indicators
-  such as poor average log probability, high no-speech probability, or suspicious compression.
+- The API response uses verbose segment and word timestamps. CourseAI records low-confidence
+  indicators such as poor average log probability, high no-speech probability, or suspicious
+  compression.
+- Low-confidence timestamp ranges are re-transcribed as short clips and stored as a second ASR
+  hypothesis for the reviewer. The primary raw transcript is never silently replaced by this pass.
 - Overlap segments are de-duplicated before the transcript is assembled.
 - Completed audio chunks and final transcripts are cached so retries reuse successful paid work.
 - GPT-OSS receives the ASR quality flags plus course-scoped references and applies only exact,
   unique, bounded text replacements. Uncertain passages remain text plus review flags.
 
 The text reviewer still does not listen to audio itself. Low-confidence sections are surfaced for
-verification rather than reconstructed from course notes.
+verification; a short-clip retranscription may be used as a second ASR hypothesis, but course notes
+are never used to reconstruct speech that is absent from the audio transcript.
+
+If your Lecture Inbox already has a `Needs review` checkbox, CourseAI now writes it
+deterministically. It becomes true whenever unresolved reviewer flags, ASR quality flags, course
+mismatch flags, or grounding warnings remain. Optional `Review flags`, `Review flag count`,
+`Grounding sources`, and `ASR model` properties are also populated when those properties exist.
 
 ## Privacy and data flow
 
