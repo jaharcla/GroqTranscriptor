@@ -247,7 +247,7 @@ class CourseGrounder:
 
     def _local_context(self, lecture, budget):
         sources = []
-        manual = self.config.context_dir / f"{lecture.course}.md"
+        manual = getattr(\n            self.config, "context_dir", self.config.state.parent / "review-context"\n        ) / f"{lecture.course}.md"
         if manual.exists():
             self._add(
                 sources,
@@ -297,7 +297,7 @@ class CourseGrounder:
         sources = self._local_context(lecture, budget)
         warnings = []
         course_page_id = self.config.courses.get(lecture.course, "")
-        if getattr(self.config, "notion_context_enabled", True) and budget[0] > 0:
+        if getattr(self.config, "notion_context_enabled", False) and budget[0] > 0:
             remote = self._cached_remote(lecture.course)
             course_page_id = remote.get("course_page_id", course_page_id)
             warnings.extend(remote.get("warnings", []))
