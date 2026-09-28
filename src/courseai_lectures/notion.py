@@ -97,6 +97,23 @@ class Notion:
             prop = schema[self.config.props[key]]
             if value not in {o["name"] for o in prop[prop["type"]].get("options", [])}:
                 raise ValueError(f"Add option '{value}' to Notion '{self.config.props[key]}'")
+
+        optional = {
+            "needs_review": {"checkbox"},
+            "review_flags": {"multi_select"},
+            "review_flag_count": {"number"},
+            "grounding_sources": {"rich_text"},
+            "asr_model": {"rich_text", "select", "status"},
+        }
+        for key, types in optional.items():
+            name = self.config.props.get(key)
+            if not name or name not in schema:
+                continue
+            if schema[name].get("type") not in types:
+                raise ValueError(
+                    f"Optional Notion property '{name}' must have type "
+                    f"{' or '.join(sorted(types))}"
+                )
         self.schema = schema
 
     def query(self, filter_body):
@@ -185,7 +202,56 @@ class Notion:
             {"children": [{"object": "block", "type": kind, kind: {"rich_text": rich(text)}}]},
         )["results"][0]
 
-    def sync(self, lecture, transcript, path, state):
+    def _review_properties(self, review_meta):
+        if not review_meta:
+            return {}
+        p = self.config.props
+        result = {}
+
+        def schema_prop(key):
+            name = p.get(key)
+            return (name, self.schema.get(name)) if name and name in self.schema else (None, None)
+
+        name, prop = schema_prop("needs_review")
+        if prop and prop.get("type") == "checkbox":
+            result[name] = {"checkbox": bool(review_meta.get("needs_review"))}
+
+        name, prop = schema_prop("review_flag_count")
+        if prop and prop.get("type") == "number":
+            result[name] = {"number": int(review_meta.get("flag_count") or 0)}
+
+        name, prop = schema_prop("review_flags")
+        if prop and prop.get("type") == "multi_select":
+            categories = []
+            for value in review_meta.get("categories", []):
+                value = str(value).strip()
+                if value and value not in categories:
+                    categories.append(value)
+            result[name] = {"multi_select": [{"name": value} for value in categories[:20]]}
+
+        name, prop = schema_prop("grounding_sources")
+        if prop and prop.get("type") == "rich_text":
+            sources = []
+            for item in review_meta.get("grounding_sources", []):
+                if isinstance(item, dict):
+                    label = str(item.get("title") or item.get("id") or "").strip()
+                else:
+                    label = str(item).strip()
+                if label and label not in sources:
+                    sources.append(label)
+            result[name] = {"rich_text": rich("; ".join(sources)[:1800])}
+
+        name, prop = schema_prop("asr_model")
+        if prop:
+            model = str(review_meta.get("asr_model") or "").strip()
+            if prop.get("type") == "rich_text":
+                result[name] = {"rich_text": rich(model[:1800])}
+            elif prop.get("type") in {"select", "status"} and model:
+                result[name] = {prop["type"]: {"name": model}}
+
+        return result
+
+    def sync(self, lecture, transcript, path, state, review_meta=None):
         self.prepare()
         self.recover(state, path)
         p = self.config.props
@@ -199,6 +265,7 @@ class Notion:
             p["local_path"]: {"rich_text": rich(str(path))},
             p["ingest_id"]: {"rich_text": rich(lecture.key)},
         }
+        properties.update(self._review_properties(review_meta))
         for key, value in (("capture", "Audio import"),):
             kind = self.schema[p[key]]["type"]
             properties[p[key]] = {kind: {"name": value}}
