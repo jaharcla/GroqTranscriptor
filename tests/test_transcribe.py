@@ -32,7 +32,7 @@ def wav(path, seconds=1):
             handle.writeframes(b"\0\0" * 16000)
 
 
-def test_request_encodes_repeated_timestamp_granularities(config, monkeypatch):
+def test_request_uses_segment_timestamps_and_safe_prompt_limit(config, monkeypatch):
     config_audio(config)
     source = config.audio / "tiny.wav"
     wav(source)
@@ -53,12 +53,33 @@ def test_request_encodes_repeated_timestamp_granularities(config, monkeypatch):
 
     client = httpx.Client(transport=httpx.MockTransport(handle))
     monkeypatch.setattr(httpx, "Client", lambda **kwargs: client)
-    result = Transcriber(config).request(source, "course terms")
+    result = Transcriber(config).request(source, "x" * 1000)
 
     assert result["text"] == "hello"
-    assert seen["body"].count(b'name="timestamp_granularities[]"') == 2
+    assert seen["body"].count(b'name="timestamp_granularities[]"') == 1
     assert b"segment" in seen["body"]
-    assert b"word" in seen["body"]
+    assert b"word" not in seen["body"]
+    assert b"x" * 600 in seen["body"]
+    assert b"x" * 601 not in seen["body"]
+
+
+def test_groq_audio_error_surfaces_safe_server_message(config, monkeypatch):
+    config_audio(config)
+    source = config.audio / "tiny.wav"
+    wav(source)
+
+    client = httpx.Client(
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(
+                400,
+                json={"error": {"message": "prompt must be 224 tokens or less"}},
+            )
+        )
+    )
+    monkeypatch.setattr(httpx, "Client", lambda **kwargs: client)
+
+    with pytest.raises(RuntimeError, match="prompt must be 224 tokens or less"):
+        Transcriber(config).request(source, "course terms")
 
 
 def test_real_decoder_chunking_and_cache(config):
