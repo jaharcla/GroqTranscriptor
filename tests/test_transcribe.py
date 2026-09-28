@@ -13,6 +13,9 @@ def config_audio(config):
     config.audio_enabled = True
     config.groq_api_key = "test-key"
     config.groq_audio_model = "whisper-large-v3-turbo"
+    config.retranscribe_low_confidence = False
+    config.retranscribe_max_segments = 6
+    config.retranscribe_padding_seconds = 2.0
     config.audio_cache = config.state.parent / "audio-cache"
     config.active_course = "KIN120"
     config.lecture_date = "2026-09-28"
@@ -154,3 +157,48 @@ def test_verbose_segments_are_shifted_and_low_confidence_is_flagged(config):
     assert result["segments"][-1]["start"] > 480
     assert result["quality_flags"]
     assert "avg_logprob" in result["quality_flags"][0]["reasons"][0]
+
+
+def test_low_confidence_segment_gets_cached_retranscription_candidate(config):
+    config_audio(config)
+    config.retranscribe_low_confidence = True
+    config.retranscribe_max_segments = 1
+    source = config.audio / "uncertain.wav"
+    wav(source)
+    transcriber = Transcriber(config)
+    transcriber.request = Mock(
+        side_effect=[
+            {
+                "text": "blood quality of the microplastics",
+                "segments": [
+                    {
+                        "start": 0.1,
+                        "end": 0.8,
+                        "text": " blood quality of the microplastics",
+                        "avg_logprob": -0.9,
+                        "no_speech_prob": 0.01,
+                        "compression_ratio": 1.1,
+                    }
+                ],
+                "words": [
+                    {"word": "blood", "start": 0.1, "end": 0.2},
+                ],
+            },
+            {
+                "text": "blood volume in the microvasculature",
+                "segments": [],
+                "words": [],
+            },
+        ]
+    )
+
+    result = transcriber.transcribe_result(source, "cardiovascular physiology")
+
+    assert result["text"] == "blood quality of the microplastics"
+    candidate = result["quality_flags"][0]["retranscription"]
+    assert candidate["text"] == "blood volume in the microvasculature"
+    assert transcriber.request.call_count == 2
+
+    cached = transcriber.transcribe_result(source, "cardiovascular physiology")
+    assert cached["quality_flags"][0]["retranscription"]["text"] == candidate["text"]
+    assert transcriber.request.call_count == 2
