@@ -64,7 +64,8 @@ def _material_text(path, limit):
                 total += len(text)
             if total >= limit:
                 break
-        return "\n".join(parts)[:limit]
+        return "
+".join(parts)[:limit]
     if suffix == ".pptx":
         from pptx import Presentation
 
@@ -83,12 +84,14 @@ def _material_text(path, limit):
                         if cells:
                             slide_text.append(" | ".join(cells))
             if slide_text:
-                value = f"[Slide {index}] " + "\n".join(slide_text)
+                value = f"[Slide {index}] " + "
+".join(slide_text)
                 parts.append(value)
                 total += len(value)
             if total >= limit:
                 break
-        return "\n".join(parts)[:limit]
+        return "
+".join(parts)[:limit]
     return ""
 
 
@@ -247,7 +250,9 @@ class CourseGrounder:
 
     def _local_context(self, lecture, budget):
         sources = []
-        manual = getattr(\n            self.config, "context_dir", self.config.state.parent / "review-context"\n        ) / f"{lecture.course}.md"
+        manual = getattr(
+            self.config, "context_dir", self.config.state.parent / "review-context"
+        ) / f"{lecture.course}.md"
         if manual.exists():
             self._add(
                 sources,
