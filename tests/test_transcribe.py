@@ -1,6 +1,7 @@
 import wave
 from unittest.mock import Mock
 
+import httpx
 import pytest
 
 from courseai_lectures.bridge import Bridge
@@ -29,6 +30,35 @@ def wav(path, seconds=1):
         handle.setframerate(16000)
         for _ in range(seconds):
             handle.writeframes(b"\0\0" * 16000)
+
+
+def test_request_encodes_repeated_timestamp_granularities(config, monkeypatch):
+    config_audio(config)
+    source = config.audio / "tiny.wav"
+    wav(source)
+
+    seen = {}
+
+    def handle(request):
+        body = request.read()
+        seen["body"] = body
+        return httpx.Response(
+            200,
+            json={
+                "text": "hello",
+                "segments": [],
+                "words": [{"word": "hello", "start": 0.0, "end": 0.4}],
+            },
+        )
+
+    client = httpx.Client(transport=httpx.MockTransport(handle))
+    monkeypatch.setattr(httpx, "Client", lambda **kwargs: client)
+    result = Transcriber(config).request(source, "course terms")
+
+    assert result["text"] == "hello"
+    assert seen["body"].count(b'name="timestamp_granularities[]"') == 2
+    assert b"segment" in seen["body"]
+    assert b"word" in seen["body"]
 
 
 def test_real_decoder_chunking_and_cache(config):
