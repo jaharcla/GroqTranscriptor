@@ -91,7 +91,7 @@ def normalize_review_result(raw, result):
 
         start = raw.index(original)
         end = start + len(original)
-        if any(start < existing_end and end > existing_start for existing_start, existing_end in accepted_ranges):
+        overlaps = any(\n            start < existing_end and end > existing_start\n            for existing_start, existing_end in accepted_ranges\n        )\n        if overlaps:
             normalized_flags.append(
                 f"Skipped model correction because it overlapped another accepted correction: "
                 f"{preview!r}"
