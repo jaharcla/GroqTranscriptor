@@ -100,8 +100,8 @@ def normalize_review_result(raw, result, allowed_evidence=None):
     accepted = []
     accepted_ranges = []
     normalized_flags = list(flags)
-    allowed = set(allowed_evidence or ())
-    if allowed:
+    allowed = None if allowed_evidence is None else set(allowed_evidence)
+    if allowed is not None:
         allowed.add("transcript")
 
     for item in corrections:
@@ -116,7 +116,7 @@ def normalize_review_result(raw, result, allowed_evidence=None):
                 f"Skipped model correction because transcript evidence was not cited: {preview!r}"
             )
             continue
-        if allowed and not evidence <= allowed:
+        if allowed is not None and not evidence <= allowed:
             unknown = sorted(evidence - allowed)
             normalized_flags.append(
                 f"Skipped model correction because it cited unknown evidence {unknown}: {preview!r}"
